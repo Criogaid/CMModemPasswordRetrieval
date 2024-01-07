@@ -1,0 +1,2 @@
+# CMModemPasswordRetrieval
+中国移动光猫超级管理员账户CMCCAdmin密码获取，适用于HG系列，仅测试于HG6821M
