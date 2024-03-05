@@ -38,11 +38,13 @@ class ModemManager:
             return False
 
     def get_admin_password(self):
+        username = "root"
         password = f"Fh@{self.mac_address[-6:]}"
-        logger.debug(f"Using password: {password}")
+        logger.debug(f"Using Username: {username}")
+        logger.debug(f"Using Password: {password}")
         tn = telnetlib.Telnet(self.host, self.port)
         tn.read_until(b"login: ")
-        tn.write(b"root\n")
+        tn.write(username.encode('ascii') + b"\n")
         tn.read_until(b"Password: ")
         tn.write(password.encode('ascii') + b"\n")
         tn.write(b"cat /flash/cfg/agentconf/factory.conf\n")
