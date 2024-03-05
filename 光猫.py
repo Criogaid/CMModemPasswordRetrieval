@@ -4,11 +4,18 @@ import subprocess
 import telnetlib
 from loguru import logger
 
+
 class ModemManager:
     def __init__(self, host="192.168.0.1", port=23):
         self.host = host
         self.port = port
         self.mac_address = self.get_mac_address()
+
+    def set_host(self):
+        self.host = input(
+            "Please enter the IP address of the modem (default:192.168.0.1): ") or self.host
+        logger.info(f"Host set to: {self.host}")
+        return self.host
 
     def get_mac_address(self):
         arp_result = subprocess.check_output("arp -a", shell=True).decode('gbk')
@@ -21,14 +28,18 @@ class ModemManager:
 
     def enable_telnet(self):
         url = f"http://{self.host}/cgi-bin/telnetenable.cgi?telnetenable=1&key={self.mac_address}"
+        logger.debug(f"Telnet Enable URL: {url}")
         response = requests.get(url)
         if "if (1 == 1)" in response.text:
             logger.info("Telnet has been successfully enabled.")
+            return True
         else:
             logger.error("Failed to enable Telnet.")
+            return False
 
     def get_admin_password(self):
         password = f"Fh@{self.mac_address[-6:]}"
+        logger.debug(f"Using password: {password}")
         tn = telnetlib.Telnet(self.host, self.port)
         tn.read_until(b"login: ")
         tn.write(b"root\n")
@@ -38,13 +49,20 @@ class ModemManager:
         tn.write(b"exit\n")
         result = tn.read_all().decode('ascii')
         admin_password = re.search(r'TelecomPasswd=(.*)', result).group(1).strip()
+        logger.debug(f"factory.conf: {result}")
         logger.info(f"Admin Password obtained successfully: {admin_password}")
         return admin_password
 
     def manage_modem(self):
-        self.enable_telnet()
-        return self.get_admin_password()
+        if self.enable_telnet():
+            return self.get_admin_password()
+        else:
+            logger.error(
+                "Please follow the manual confirmation steps at  `https://www.bilibili.com/read/cv21044770/` and modify the code if necessary.")
+            return False
+
 
 if __name__ == "__main__":
     manager = ModemManager()
+    manager.set_host()
     admin_password = manager.manage_modem()
