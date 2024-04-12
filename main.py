@@ -19,7 +19,7 @@ class ModemManager:
 
     def get_mac_address(self):
         arp_result = subprocess.check_output("arp -a", shell=True).decode('gbk')
-        mac_address = [re.split(r'\s+', line)[2] for line in arp_result.split("\n") if self.host in line][0]
+        mac_address = [re.split(r'\s+', line)[2] for line in arp_result.split("\n") if self.host + " " in line][0]
         if mac_address:
             logger.info(f"MAC Address obtained successfully: {mac_address}")
         else:
