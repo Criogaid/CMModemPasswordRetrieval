@@ -1,6 +1,8 @@
 # CMModemPasswordRetrieval
 这是一个开源项目，旨在获取中国移动光猫超级管理员账户CMCCAdmin的密码，适用于HG系列，已在HG6821M上进行了测试。
 
+感谢 [marcos1](https://github.com/Criogaid/CMModemPasswordRetrieval/pull/3) 完善了获取方式，并且已于HG6042A1上进行了测试。
+
 **原作者：** [布束砥信](https://space.bilibili.com/521361612)  
 **出处：** [bilibili](https://www.bilibili.com/read/cv21044770)
 
