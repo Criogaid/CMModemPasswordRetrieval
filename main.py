@@ -13,6 +13,24 @@ def clear_console():
     print("\n" * rows, end="")
 
 
+def obtain_value_from_text(text):
+    lines_to_return = []
+
+    if text is None:
+        return lines_to_return
+
+    # 正则表达式匹配以 "get success!value=" 开头的行
+    pattern = re.compile(r'^get success!value=.*$')
+
+    # 将输入的文本按行处理
+    for line in text.splitlines():
+        line = line.strip()
+        if line and pattern.match(line):
+            lines_to_return.append(line)
+
+    return lines_to_return
+
+
 class ModemManager:
     def __init__(self):
         self.host = ""
@@ -127,6 +145,11 @@ class ModemManager:
                     tn.write(b"show admin_name\n")
                     time.sleep(0.5)
                     tn.write(b"exit\n")
+                    time.sleep(0.5)
+                    tn.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username\n")
+                    time.sleep(0.5)
+                    tn.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Password\n")
+                    time.sleep(0.5)
                     tn.write(b"exit\n")
                     result = tn.read_all().decode('utf-8')
             except Exception as e:
@@ -136,9 +159,19 @@ class ModemManager:
                 admin_username = re.search(r'admin_name=(.*)', result).group(1).strip()
                 admin_password = re.search(r'admin_pwd=(.*)', result).group(1).strip()
             except AttributeError as e:
-                logger.error(f"Failed to parse factory.conf: {e}")
-                return None
-            logger.debug(f"factory.conf: {result}")
+                logger.error(f"Failed to obtain Admin Username and Password form factory mode: {e}")
+                if "Unknown command" in result:
+                    logger.debug("Entering experimental mode. This mode is based on tutorial methods and has not been fully tested. If you successfully retrieve the results, please provide feedback to the author via an issue report.")
+                    obtain_result = obtain_value_from_text(result)
+                    if isinstance(obtain_result, list) and len(obtain_result) == 2:
+                        admin_username = obtain_result[0]
+                        admin_password = obtain_result[1]
+                    else:
+                        logger.error("Experimental mode failed.")
+                        return None
+                else:
+                    return None
+            logger.debug(f"Telenet Result: {result}")
         return admin_username, admin_password
 
     def manage_modem(self):
