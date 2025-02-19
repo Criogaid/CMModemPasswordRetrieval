@@ -8,6 +8,10 @@
 
 我们欢迎任何形式的贡献，包括但不限于提交问题、改进代码、提供文档等。感谢您对CMModemPasswordRetrieval项目的支持。
 
+感谢[YxVM](https://yxvm.com/aff.php?aff=717)提供的服务器支持，使我能够在旅行期间顺利进行远程开发工作。
+
+![yxvm](https://yxvm.com/assets/img/logo.png)
+
 ## 工作原理：
 
 ### 1. 初始化（`__init__`）
