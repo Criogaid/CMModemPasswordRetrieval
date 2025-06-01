@@ -6,7 +6,8 @@ import time
 
 import requests
 from loguru import logger
-
+import json
+import sys
 
 def clear_console():
     rows, columns = os.get_terminal_size()
@@ -62,7 +63,7 @@ class ModemManager:
         if not arp_result:
             logger.error("Failed to obtain ARP table.")
             return None
-        logger.debug(arp_result)
+        # logger.debug(arp_result)
         lines = arp_result.split("\n")
         for line in lines:
             line = line.strip()
@@ -75,7 +76,10 @@ class ModemManager:
                 break
         else:
             logger.error(f"Failed to obtain MAC address from ARP table for host {self.host}")
-            return None
+            if input("Failed to get MAC address. Enter manually? [Y/Others] ") in "Yy":
+                mac_address = input("Mac Address(like ff-ff-ff-ff-ff-ff): ")
+            else:
+                mac_address = None
         if not mac_address:
             logger.error("Failed to obtain MAC address.")
             return None
@@ -171,7 +175,7 @@ class ModemManager:
                         return None
                 else:
                     return None
-            logger.debug(f"Telenet Result: {result}")
+            # logger.debug(f"Telenet Result: {result}")
         return admin_username, admin_password
 
     def manage_modem(self):
@@ -181,11 +185,34 @@ class ModemManager:
             return False
 
     def main(self):
-        self.host = self.set_host()
-        self.mac_address = self.get_mac_address()
+        ConfigFile=os.path.join(sys.path[0],'CMCCModelConfig.json')
+        '''Configuration file CMCCModelConfig.json
+        {
+            "date":"1970-1-1 00:00:00",
+            "host":"182.168.0.1",
+            "mac_address":"ffffffffffff"
+        }
+        '''
+        readconfig=False
+        if os.path.exists(ConfigFile):
+            if input("Do you want to use the old Configuration file? [Y/Others] ") in "Yy":
+                readconfig=True
+                logger.info(f"Reading Config...")
+                try:
+                    with open(ConfigFile,"r") as f:
+                        Config = json.loads(f.read())
+                        self.host = Config["host"]
+                        self.mac_address = Config["mac_address"]
+                        logger.info(f"Last Config: {ConfigFile} on {Config["date"]}")
+                except:
+                    logger.error(f"Failed to read configuration. Please delete: {ConfigFile} and try again. Error details below:")
+                    raise
+        if readconfig==False:
+            self.host = self.set_host()
+            self.mac_address = self.get_mac_address()
         data = self.manage_modem()
         if isinstance(data, tuple) and data:
-            clear_console()
+            # clear_console()
             logger.info(f"Sucessfully obtained Admin Username and Password for {self.host}!")
             logger.info(f"Username: {data[0]}")
             logger.info(f"Password: {data[1]}")
@@ -194,7 +221,17 @@ class ModemManager:
             logger.info(
                 "Please follow the manual confirmation steps at "
                 "`https://www.bilibili.com/read/cv21044770/` and modify the code if necessary.")
-            exit(0)
+        if input("Do you want to save the configuration? [Y/Others] ") in "Yy":
+            try:
+                with open(ConfigFile,"w+") as f:
+                    datenow=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    Config=json.dumps({"date": datenow, "host":self.host, "mac_address":self.mac_address})
+                    f.write(Config)
+                    logger.info(f"Save Config: {ConfigFile} on {datenow}")
+            except:
+                logger.error(f"Failed to write configuration. Please check read/write permissions for {ConfigFile} .Error details below:")
+                raise
+        exit(0)
 
 
 if __name__ == "__main__":
