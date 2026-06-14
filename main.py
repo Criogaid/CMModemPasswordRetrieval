@@ -1,13 +1,68 @@
 import os
+import json
 import re
 import subprocess
+import sys
 import telnetlib
 import time
 
 import requests
 from loguru import logger
-import json
-import sys
+
+
+HOST_PATTERN = re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")
+MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
+
+
+def is_yes_response(response):
+    return isinstance(response, str) and response.strip().lower() == "y"
+
+
+def validate_host(host):
+    return isinstance(host, str) and bool(HOST_PATTERN.fullmatch(host.strip()))
+
+
+def normalize_mac_address(mac_address):
+    if not isinstance(mac_address, str):
+        return None
+
+    normalized = mac_address.strip().upper().replace("-", "").replace(":", "")
+    if not MAC_PATTERN.fullmatch(normalized):
+        return None
+    return normalized
+
+
+def load_config(config_file):
+    with open(config_file, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    host = str(config.get("host", "")).strip()
+    mac_address = normalize_mac_address(config.get("mac_address", ""))
+    if not validate_host(host) or not mac_address:
+        raise ValueError("Invalid host or MAC address in configuration file.")
+
+    return {
+        "date": config.get("date", "unknown"),
+        "host": host,
+        "mac_address": mac_address,
+    }
+
+
+def save_config(config_file, host, mac_address):
+    host = host.strip() if isinstance(host, str) else ""
+    mac_address = normalize_mac_address(mac_address)
+    if not validate_host(host) or not mac_address:
+        raise ValueError("Cannot save invalid host or MAC address.")
+
+    datenow = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump({
+            "date": datenow,
+            "host": host,
+            "mac_address": mac_address,
+        }, f, ensure_ascii=False, indent=2)
+    return datenow
+
 
 def clear_console():
     rows, columns = os.get_terminal_size()
@@ -42,17 +97,14 @@ class ModemManager:
 
     def set_host(self):
         host = input("Please enter the IP address of the modem (default:192.168.0.1): ") or "192.168.0.1"
-        if not isinstance(host, str):
-            raise TypeError("Host address must be a string.")
-        if not host:
-            raise ValueError("Host address must not be empty.")
-        if not re.match(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$", host):
+        if not validate_host(host):
             raise ValueError("Invalid host address.")
-        self.host = host
+        self.host = host.strip()
         logger.info(f"Host set to: {self.host}")
         return self.host
 
     def get_mac_address(self):
+        mac_address = None
         try:
             arp_result = subprocess.check_output("arp -a", shell=True).decode('utf-8')
         except UnicodeDecodeError:
@@ -76,16 +128,16 @@ class ModemManager:
                 break
         else:
             logger.error(f"Failed to obtain MAC address from ARP table for host {self.host}")
-            if input("Failed to get MAC address. Enter manually? [Y/Others] ") in "Yy":
+            if is_yes_response(input("Failed to get MAC address. Enter manually? [Y/Others] ")):
                 mac_address = input("Mac Address(like ff-ff-ff-ff-ff-ff): ")
             else:
                 mac_address = None
-        if not mac_address:
-            logger.error("Failed to obtain MAC address.")
+        normalized_mac_address = normalize_mac_address(mac_address)
+        if not normalized_mac_address:
+            logger.error("Failed to obtain a valid MAC address.")
             return None
-        mac_address = mac_address.upper().replace("-", "")
-        logger.info(f"MAC Address obtained successfully: {mac_address}")
-        return mac_address
+        logger.info(f"MAC Address obtained successfully: {normalized_mac_address}")
+        return normalized_mac_address
 
     def enable_telnet(self):
         url = f"http://{self.host}/cgi-bin/telnetenable.cgi?telnetenable=1&key={self.mac_address}"
@@ -195,16 +247,15 @@ class ModemManager:
         '''
         readconfig=False
         if os.path.exists(ConfigFile):
-            if input("Do you want to use the old Configuration file? [Y/Others] ") in "Yy":
-                readconfig=True
+            if is_yes_response(input("Do you want to use the old Configuration file? [Y/Others] ")):
                 logger.info(f"Reading Config...")
                 try:
-                    with open(ConfigFile,"r") as f:
-                        Config = json.loads(f.read())
-                        self.host = Config["host"]
-                        self.mac_address = Config["mac_address"]
-                        logger.info(f"Last Config: {ConfigFile} on {Config["date"]}")
-                except:
+                    Config = load_config(ConfigFile)
+                    self.host = Config["host"]
+                    self.mac_address = Config["mac_address"]
+                    logger.info(f"Last Config: {ConfigFile} on {Config['date']}")
+                    readconfig=True
+                except Exception:
                     logger.error(f"Failed to read configuration. Please delete: {ConfigFile} and try again. Error details below:")
                     raise
         if readconfig==False:
@@ -221,14 +272,11 @@ class ModemManager:
             logger.info(
                 "Please follow the manual confirmation steps at "
                 "`https://www.bilibili.com/read/cv21044770/` and modify the code if necessary.")
-        if input("Do you want to save the configuration? [Y/Others] ") in "Yy":
+        if self.host and self.mac_address and is_yes_response(input("Do you want to save the configuration? [Y/Others] ")):
             try:
-                with open(ConfigFile,"w+") as f:
-                    datenow=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                    Config=json.dumps({"date": datenow, "host":self.host, "mac_address":self.mac_address})
-                    f.write(Config)
-                    logger.info(f"Save Config: {ConfigFile} on {datenow}")
-            except:
+                datenow = save_config(ConfigFile, self.host, self.mac_address)
+                logger.info(f"Save Config: {ConfigFile} on {datenow}")
+            except Exception:
                 logger.error(f"Failed to write configuration. Please check read/write permissions for {ConfigFile} .Error details below:")
                 raise
         exit(0)
