@@ -10,8 +10,11 @@ class MainHelperTests(unittest.TestCase):
     def test_is_yes_response_only_accepts_y(self):
         self.assertTrue(is_yes_response("Y"))
         self.assertTrue(is_yes_response(" y "))
+        self.assertTrue(is_yes_response(" Y\t"))
         self.assertFalse(is_yes_response(""))
         self.assertFalse(is_yes_response("yes"))
+        self.assertFalse(is_yes_response("yy"))
+        self.assertFalse(is_yes_response("y y"))
         self.assertFalse(is_yes_response("n"))
 
     def test_normalize_mac_address_accepts_common_formats(self):

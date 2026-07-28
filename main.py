@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import socket
 import subprocess
 import sys
 import telnetlib
@@ -15,11 +16,38 @@ MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
 
 
 def is_yes_response(response):
-    return isinstance(response, str) and response.strip().lower() == "y"
+    return isinstance(response, str) and response.strip().casefold() == "y"
 
 
 def validate_host(host):
     return isinstance(host, str) and bool(HOST_PATTERN.fullmatch(host.strip()))
+
+
+def is_host_reachable(host):
+    if not validate_host(host):
+        return False
+
+    try:
+        result = subprocess.run(
+            ["ping", "-n", "1", "-w", "1500", host],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        logger.debug(f"Ping reachability check failed: {error}")
+    else:
+        if result.returncode == 0:
+            return True
+
+    # TCP 80 是后续启用 Telnet 所依赖的实际通信路径，可兼容禁用 ICMP 的设备。
+    try:
+        with socket.create_connection((host, 80), timeout=2):
+            return True
+    except OSError as error:
+        logger.debug(f"TCP port 80 reachability check failed: {error}")
+        return False
 
 
 def normalize_mac_address(mac_address):
@@ -104,40 +132,40 @@ class ModemManager:
         return self.host
 
     def get_mac_address(self):
-        mac_address = None
+        # ICMP 探测也会促使 Windows 刷新目标 IP 的 ARP 条目。
+        if not is_host_reachable(self.host):
+            logger.error(f"Host {self.host} is unreachable.")
+            return None
+
         try:
-            arp_result = subprocess.check_output("arp -a", shell=True).decode('utf-8')
+            arp_output = subprocess.check_output("arp -a", shell=True)
+            arp_result = arp_output.decode('utf-8')
         except UnicodeDecodeError:
-            arp_result = subprocess.check_output("arp -a", shell=True).decode('gbk')
+            arp_result = arp_output.decode('gbk')
         except Exception as e:
             logger.error(f"Please Check your host address or Send the following error to the author:\r\n{e}")
-            exit(0)
+            return None
         if not arp_result:
             logger.error("Failed to obtain ARP table.")
             return None
-        # logger.debug(arp_result)
+        logger.debug(f"ARP Result:\n{arp_result}")
         lines = arp_result.split("\n")
         for line in lines:
-            line = line.strip()
-            if self.host + " " in line and "---" not in line:
-                fields = re.split(r'\s+', line)
-                if len(fields) < 3:
-                    logger.error(f"Invalid ARP table entry: {line}")
-                    return None
-                mac_address = next((item for item in fields if "-" in item), None)
-                break
-        else:
-            logger.error(f"Failed to obtain MAC address from ARP table for host {self.host}")
-            if is_yes_response(input("Failed to get MAC address. Enter manually? [Y/Others] ")):
-                mac_address = input("Mac Address(like ff-ff-ff-ff-ff-ff): ")
-            else:
-                mac_address = None
-        normalized_mac_address = normalize_mac_address(mac_address)
-        if not normalized_mac_address:
-            logger.error("Failed to obtain a valid MAC address.")
+            fields = re.split(r'\s+', line.strip())
+            if not fields or fields[0] != self.host:
+                continue
+
+            for field in fields[1:]:
+                normalized_mac_address = normalize_mac_address(field)
+                if normalized_mac_address:
+                    logger.info(f"MAC Address obtained successfully: {normalized_mac_address}")
+                    return normalized_mac_address
+
+            logger.error(f"Invalid ARP table entry: {line.strip()}")
             return None
-        logger.info(f"MAC Address obtained successfully: {normalized_mac_address}")
-        return normalized_mac_address
+
+        logger.error(f"No ARP entry found for host {self.host}.")
+        return None
 
     def enable_telnet(self):
         url = f"http://{self.host}/cgi-bin/telnetenable.cgi?telnetenable=1&key={self.mac_address}"
@@ -175,13 +203,13 @@ class ModemManager:
             except Exception as e:
                 logger.error(f"Telnet connection failed: {e}")
                 return None
+            logger.debug(f"Telnet Result:\n{result}")
             try:
                 admin_username = re.search(r'TelecomAccount=(.*)', result).group(1).strip()
                 admin_password = re.search(r'TelecomPasswd=(.*)', result).group(1).strip()
             except AttributeError as e:
                 logger.error(f"Failed to parse factory.conf: {e}")
                 return None
-            logger.debug(f"factory.conf: {result}")
         elif self.method == 1:
             username = "admin"
             password = f"Fh@{self.mac_address[-6:]}"
@@ -211,6 +239,7 @@ class ModemManager:
             except Exception as e:
                 logger.error(f"Telnet connection failed: {e}")
                 return None
+            logger.debug(f"Telnet Result:\n{result}")
             try:
                 admin_username = re.search(r'admin_name=(.*)', result).group(1).strip()
                 admin_password = re.search(r'admin_pwd=(.*)', result).group(1).strip()
@@ -227,7 +256,6 @@ class ModemManager:
                         return None
                 else:
                     return None
-            # logger.debug(f"Telenet Result: {result}")
         return admin_username, admin_password
 
     def manage_modem(self):
@@ -252,7 +280,6 @@ class ModemManager:
                 try:
                     Config = load_config(ConfigFile)
                     self.host = Config["host"]
-                    self.mac_address = Config["mac_address"]
                     logger.info(f"Last Config: {ConfigFile} on {Config['date']}")
                     readconfig=True
                 except Exception:
@@ -260,10 +287,12 @@ class ModemManager:
                     raise
         if readconfig==False:
             self.host = self.set_host()
-            self.mac_address = self.get_mac_address()
+        self.mac_address = self.get_mac_address()
+        if not self.mac_address:
+            logger.error("Cannot continue without a reachable host and a valid ARP entry.")
+            exit(0)
         data = self.manage_modem()
-        if isinstance(data, tuple) and data:
-            # clear_console()
+        if isinstance(data, tuple) and len(data) == 2 and all(data):
             logger.info(f"Sucessfully obtained Admin Username and Password for {self.host}!")
             logger.info(f"Username: {data[0]}")
             logger.info(f"Password: {data[1]}")
@@ -272,6 +301,7 @@ class ModemManager:
             logger.info(
                 "Please follow the manual confirmation steps at "
                 "`https://www.bilibili.com/read/cv21044770/` and modify the code if necessary.")
+            exit(0)
         if self.host and self.mac_address and is_yes_response(input("Do you want to save the configuration? [Y/Others] ")):
             try:
                 datenow = save_config(ConfigFile, self.host, self.mac_address)
