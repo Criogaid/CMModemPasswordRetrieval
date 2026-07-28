@@ -35,7 +35,7 @@ class DebugOutputTests(unittest.TestCase):
         telnet.read_all.return_value = telnet_result.encode("ascii")
 
         with (
-            patch("main.telnetlib.Telnet", return_value=telnet),
+            patch("main.Telnet", return_value=telnet),
             patch("main.logger.debug") as debug_log,
         ):
             result = manager.get_admin_password()
@@ -54,7 +54,7 @@ class DebugOutputTests(unittest.TestCase):
         telnet.read_all.return_value = telnet_result.encode("utf-8")
 
         with (
-            patch("main.telnetlib.Telnet", return_value=telnet),
+            patch("main.Telnet", return_value=telnet),
             patch("main.time.sleep"),
             patch("main.logger.debug") as debug_log,
         ):

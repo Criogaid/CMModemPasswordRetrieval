@@ -53,7 +53,7 @@ class MainFlowTests(unittest.TestCase):
         manage_modem.assert_not_called()
         input_mock.assert_not_called()
 
-    def test_loaded_config_revalidates_mac_from_arp(self):
+    def test_loaded_config_skips_network_validation(self):
         manager = ModemManager()
         with (
             patch("main.os.path.exists", return_value=True),
@@ -62,7 +62,7 @@ class MainFlowTests(unittest.TestCase):
                 "host": "192.168.0.1",
                 "mac_address": "AAAAAAAAAAAA",
             }),
-            patch.object(manager, "get_mac_address", return_value="BBBBBBBBBBBB") as get_mac_address,
+            patch.object(manager, "get_mac_address") as get_mac_address,
             patch.object(manager, "manage_modem", return_value=("admin", "password")),
             patch("builtins.input", side_effect=["y", "n"]),
         ):
@@ -70,8 +70,8 @@ class MainFlowTests(unittest.TestCase):
                 manager.main()
 
         self.assertEqual(raised.exception.code, 0)
-        self.assertEqual(manager.mac_address, "BBBBBBBBBBBB")
-        get_mac_address.assert_called_once_with()
+        self.assertEqual(manager.mac_address, "AAAAAAAAAAAA")
+        get_mac_address.assert_not_called()
 
 
 if __name__ == "__main__":

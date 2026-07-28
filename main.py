@@ -1,14 +1,19 @@
-import os
 import json
+import os
 import re
 import socket
 import subprocess
 import sys
-import telnetlib
 import time
 
 import requests
 from loguru import logger
+
+# Python 3.13 移除了标准库 telnetlib；旧版继续使用内置实现。
+if sys.version_info >= (3, 13):
+    from telnetlib3.telnetlib import Telnet
+else:
+    from telnetlib import Telnet
 
 
 HOST_PATTERN = re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")
@@ -61,8 +66,8 @@ def normalize_mac_address(mac_address):
 
 
 def load_config(config_file):
-    with open(config_file, "r", encoding="utf-8") as f:
-        config = json.load(f)
+    with open(config_file, "r", encoding="utf-8") as config_handle:
+        config = json.load(config_handle)
 
     host = str(config.get("host", "")).strip()
     mac_address = normalize_mac_address(config.get("mac_address", ""))
@@ -82,37 +87,32 @@ def save_config(config_file, host, mac_address):
     if not validate_host(host) or not mac_address:
         raise ValueError("Cannot save invalid host or MAC address.")
 
-    datenow = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    with open(config_file, "w", encoding="utf-8") as f:
+    saved_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    with open(config_file, "w", encoding="utf-8") as config_handle:
         json.dump({
-            "date": datenow,
+            "date": saved_at,
             "host": host,
             "mac_address": mac_address,
-        }, f, ensure_ascii=False, indent=2)
-    return datenow
-
-
-def clear_console():
-    rows, columns = os.get_terminal_size()
-    print("\n" * rows, end="")
+        }, config_handle, ensure_ascii=False, indent=2)
+    return saved_at
 
 
 def obtain_value_from_text(text):
-    lines_to_return = []
+    matched_lines = []
 
     if text is None:
-        return lines_to_return
+        return matched_lines
 
     # 正则表达式匹配以 "get success!value=" 开头的行
-    pattern = re.compile(r'^get success!value=.*$')
+    success_value_pattern = re.compile(r'^get success!value=.*$')
 
     # 将输入的文本按行处理
     for line in text.splitlines():
         line = line.strip()
-        if line and pattern.match(line):
-            lines_to_return.append(line)
+        if line and success_value_pattern.match(line):
+            matched_lines.append(line)
 
-    return lines_to_return
+    return matched_lines
 
 
 class ModemManager:
@@ -120,7 +120,6 @@ class ModemManager:
         self.host = ""
         self.port = 23
         self.mac_address = ""
-        self.host = ""
         self.method = ""
 
     def set_host(self):
@@ -132,7 +131,7 @@ class ModemManager:
         return self.host
 
     def get_mac_address(self):
-        # ICMP 探测也会促使 Windows 刷新目标 IP 的 ARP 条目。
+        # 主动探测会促使 Windows 刷新目标 IP 的 ARP 条目。
         if not is_host_reachable(self.host):
             logger.error(f"Host {self.host} is unreachable.")
             return None
@@ -142,8 +141,8 @@ class ModemManager:
             arp_result = arp_output.decode('utf-8')
         except UnicodeDecodeError:
             arp_result = arp_output.decode('gbk')
-        except Exception as e:
-            logger.error(f"Please Check your host address or Send the following error to the author:\r\n{e}")
+        except Exception as error:
+            logger.error(f"Please Check your host address or Send the following error to the author:\r\n{error}")
             return None
         if not arp_result:
             logger.error("Failed to obtain ARP table.")
@@ -192,23 +191,23 @@ class ModemManager:
             logger.debug(f"Using Username: {username}")
             logger.debug(f"Using Password: {password}")
             try:
-                with telnetlib.Telnet(self.host, self.port) as tn:
-                    tn.read_until(b"login: ")
-                    tn.write(username.encode('ascii') + b"\n")
-                    tn.read_until(b"Password: ")
-                    tn.write(password.encode('ascii') + b"\n")
-                    tn.write(b"cat /flash/cfg/agentconf/factory.conf\n")
-                    tn.write(b"exit\n")
-                    result = tn.read_all().decode('ascii')
-            except Exception as e:
-                logger.error(f"Telnet connection failed: {e}")
+                with Telnet(self.host, self.port) as telnet:
+                    telnet.read_until(b"login: ")
+                    telnet.write(username.encode('ascii') + b"\n")
+                    telnet.read_until(b"Password: ")
+                    telnet.write(password.encode('ascii') + b"\n")
+                    telnet.write(b"cat /flash/cfg/agentconf/factory.conf\n")
+                    telnet.write(b"exit\n")
+                    result = telnet.read_all().decode('ascii')
+            except Exception as error:
+                logger.error(f"Telnet connection failed: {error}")
                 return None
             logger.debug(f"Telnet Result:\n{result}")
             try:
                 admin_username = re.search(r'TelecomAccount=(.*)', result).group(1).strip()
                 admin_password = re.search(r'TelecomPasswd=(.*)', result).group(1).strip()
-            except AttributeError as e:
-                logger.error(f"Failed to parse factory.conf: {e}")
+            except AttributeError as error:
+                logger.error(f"Failed to parse factory.conf: {error}")
                 return None
         elif self.method == 1:
             username = "admin"
@@ -216,41 +215,41 @@ class ModemManager:
             logger.debug(f"Using Username: {username}")
             logger.debug(f"Using Password: {password}")
             try:
-                with telnetlib.Telnet(self.host, self.port) as tn:
-                    tn.read_until(b"login:")
-                    tn.write(username.encode('utf-8') + b"\n")
-                    tn.read_until(b"Password:")
-                    tn.write(password.encode('utf-8') + b"\n")
+                with Telnet(self.host, self.port) as telnet:
+                    telnet.read_until(b"login:")
+                    telnet.write(username.encode('utf-8') + b"\n")
+                    telnet.read_until(b"Password:")
+                    telnet.write(password.encode('utf-8') + b"\n")
                     time.sleep(0.5)
-                    tn.write(b"load_cli factory\n")
+                    telnet.write(b"load_cli factory\n")
                     time.sleep(0.5)
-                    tn.write(b"show admin_pwd\n")
+                    telnet.write(b"show admin_pwd\n")
                     time.sleep(0.5)
-                    tn.write(b"show admin_name\n")
+                    telnet.write(b"show admin_name\n")
                     time.sleep(0.5)
-                    tn.write(b"exit\n")
+                    telnet.write(b"exit\n")
                     time.sleep(0.5)
-                    tn.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username\n")
+                    telnet.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username\n")
                     time.sleep(0.5)
-                    tn.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Password\n")
+                    telnet.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Password\n")
                     time.sleep(0.5)
-                    tn.write(b"exit\n")
-                    result = tn.read_all().decode('utf-8')
-            except Exception as e:
-                logger.error(f"Telnet connection failed: {e}")
+                    telnet.write(b"exit\n")
+                    result = telnet.read_all().decode('utf-8')
+            except Exception as error:
+                logger.error(f"Telnet connection failed: {error}")
                 return None
             logger.debug(f"Telnet Result:\n{result}")
             try:
                 admin_username = re.search(r'admin_name=(.*)', result).group(1).strip()
                 admin_password = re.search(r'admin_pwd=(.*)', result).group(1).strip()
-            except AttributeError as e:
-                logger.error(f"Failed to obtain Admin Username and Password form factory mode: {e}")
+            except AttributeError as error:
+                logger.error(f"Failed to obtain Admin Username and Password form factory mode: {error}")
                 if "Unknown command" in result:
                     logger.debug("Entering experimental mode. This mode is based on tutorial methods and has not been fully tested. If you successfully retrieve the results, please provide feedback to the author via an issue report.")
-                    obtain_result = obtain_value_from_text(result)
-                    if isinstance(obtain_result, list) and len(obtain_result) == 2:
-                        admin_username = obtain_result[0]
-                        admin_password = obtain_result[1]
+                    obtained_values = obtain_value_from_text(result)
+                    if isinstance(obtained_values, list) and len(obtained_values) == 2:
+                        admin_username = obtained_values[0]
+                        admin_password = obtained_values[1]
                     else:
                         logger.error("Experimental mode failed.")
                         return None
@@ -265,37 +264,31 @@ class ModemManager:
             return False
 
     def main(self):
-        ConfigFile=os.path.join(sys.path[0],'CMCCModelConfig.json')
-        '''Configuration file CMCCModelConfig.json
-        {
-            "date":"1970-1-1 00:00:00",
-            "host":"182.168.0.1",
-            "mac_address":"ffffffffffff"
-        }
-        '''
-        readconfig=False
-        if os.path.exists(ConfigFile):
+        config_file = os.path.join(sys.path[0], "CMCCModelConfig.json")
+        config_loaded = False
+        if os.path.exists(config_file):
             if is_yes_response(input("Do you want to use the old Configuration file? [Y/Others] ")):
-                logger.info(f"Reading Config...")
+                logger.info("Reading Config...")
                 try:
-                    Config = load_config(ConfigFile)
-                    self.host = Config["host"]
-                    logger.info(f"Last Config: {ConfigFile} on {Config['date']}")
-                    readconfig=True
+                    config = load_config(config_file)
+                    self.host = config["host"]
+                    self.mac_address = config["mac_address"]
+                    logger.info(f"Last Config: {config_file} on {config['date']}")
+                    config_loaded = True
                 except Exception:
-                    logger.error(f"Failed to read configuration. Please delete: {ConfigFile} and try again. Error details below:")
+                    logger.error(f"Failed to read configuration. Please delete: {config_file} and try again. Error details below:")
                     raise
-        if readconfig==False:
+        if not config_loaded:
             self.host = self.set_host()
-        self.mac_address = self.get_mac_address()
-        if not self.mac_address:
-            logger.error("Cannot continue without a reachable host and a valid ARP entry.")
-            exit(0)
-        data = self.manage_modem()
-        if isinstance(data, tuple) and len(data) == 2 and all(data):
-            logger.info(f"Sucessfully obtained Admin Username and Password for {self.host}!")
-            logger.info(f"Username: {data[0]}")
-            logger.info(f"Password: {data[1]}")
+            self.mac_address = self.get_mac_address()
+            if not self.mac_address:
+                logger.error("Cannot continue without a reachable host and a valid ARP entry.")
+                exit(0)
+        credentials = self.manage_modem()
+        if isinstance(credentials, tuple) and len(credentials) == 2 and all(credentials):
+            logger.info(f"Successfully obtained Admin Username and Password for {self.host}!")
+            logger.info(f"Username: {credentials[0]}")
+            logger.info(f"Password: {credentials[1]}")
         else:
             logger.error("Failed to obtain Admin Username and Password.")
             logger.info(
@@ -304,10 +297,10 @@ class ModemManager:
             exit(0)
         if self.host and self.mac_address and is_yes_response(input("Do you want to save the configuration? [Y/Others] ")):
             try:
-                datenow = save_config(ConfigFile, self.host, self.mac_address)
-                logger.info(f"Save Config: {ConfigFile} on {datenow}")
+                saved_at = save_config(config_file, self.host, self.mac_address)
+                logger.info(f"Save Config: {config_file} on {saved_at}")
             except Exception:
-                logger.error(f"Failed to write configuration. Please check read/write permissions for {ConfigFile} .Error details below:")
+                logger.error(f"Failed to write configuration. Please check read/write permissions for {config_file}. Error details below:")
                 raise
         exit(0)
 
