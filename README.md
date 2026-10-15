@@ -69,13 +69,19 @@ python main.py
 
 ### 获取密码
 
-取得 MAC 后，程序调用光猫的 HTTP 接口启用 Telnet，并根据设备返回结果选择对应的 Telnet 命令流程。登录密码由 `Fh@` 和 MAC 后六位组成，随后从设备配置或厂商 CLI 中读取超级管理员账号和密码。
+After obtaining the MAC address, the program requests `/cgi-bin/telnetenable.cgi?telnetenable=1&key=<MAC>`. The response must be HTTP 200; redirects are not followed and the response body is not used to select a retrieval method. It then opens and closes a TCP connection to the Telnet port (23). If either check fails, the program stops before attempting any login or credential query.
+
+The program tries `root`, then `admin`, using `Fh@` followed by the last six uppercase MAC characters as the Telnet password. For each username, it tries these readers in order: `cat /flash/cfg/agentconf/factory.conf` (`TelecomAccount` and `TelecomPasswd`), `load_cli factory` followed by `show admin_pwd` and `show admin_name`, then `cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username` and `.Password`. Each combination uses a fresh Telnet session, which is closed after the attempt. A login failure skips the remaining readers for that username; a reader failure advances to the next reader. The first successful result stops all further attempts.
+
+The factory CLI reader uses `CMCCAdmin` with a warning if it receives a nonempty password but no account from `show admin_name`. Other readers require both values. Passwords are taken directly from device output, without adding an account prefix; `cfg_cmd` results exclude the `get success!value=` marker.
+
+Login and password prompts are matched without regard to letter case. Commands wait for a shell or CLI prompt ending in `#`, `$`, or `>` instead of using fixed delays. HTTP requests, TCP connections, and prompt reads have bounded timeouts defined by `HTTP_TIMEOUT_SECONDS` and `TELNET_TIMEOUT_SECONDS` in [main.py](main.py).
 
 成功后，程序会显示凭据，并询问是否保存当前 IP 和 MAC 供下次直接使用。失败时会立即退出，不保存配置。
 
 ## 调试与安全
 
-程序保留完整 ARP 和 Telnet 调试输出，其中可能包含设备 MAC、Telnet 登录密码和管理员凭据。分享终端日志、录屏或截图前必须先脱敏。
+The program logs complete ARP output and decoded Telnet replies, which can contain device MAC addresses and administrator credentials, including an echoed Telnet password. Redact terminal logs, recordings, and screenshots before sharing them.
 
 `CMCCModelConfig.json` 已加入 `.gitignore`，不要提交真实设备配置或凭据。程序启用 Telnet 后不会自动关闭该服务；完成操作后应按设备管理要求关闭 Telnet 或重启光猫。
 
@@ -86,7 +92,7 @@ python -m unittest discover -s tests -v
 python -m pytest -q
 ```
 
-自动化测试会模拟网络、ARP、Telnet 和交互输入，不需要连接真实光猫。
+Automated tests simulate HTTP, ARP, and Telnet interactions, including a local TCP server for Telnet protocol checks. They do not require a physical modem.
 
 ## 许可证
 

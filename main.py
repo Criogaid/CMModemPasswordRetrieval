@@ -5,6 +5,8 @@ import socket
 import subprocess
 import sys
 import time
+from http import HTTPStatus
+from typing import Optional
 
 import requests
 from loguru import logger
@@ -16,8 +18,18 @@ else:
     from telnetlib import Telnet
 
 
-HOST_PATTERN = re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")
+HOST_PATTERN = re.compile(
+    r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+)
 MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
+HTTP_TIMEOUT_SECONDS = 5
+TELNET_TIMEOUT_SECONDS = 5
+LOGIN_PROMPT = re.compile(rb"login:\s*", re.IGNORECASE)
+PASSWORD_PROMPT = re.compile(rb"password:\s*", re.IGNORECASE)
+# Exclude assignments so a password ending in '#' is not mistaken for a prompt.
+SHELL_PROMPT = re.compile(rb"(?m)^[^\r\n=]*[#$>][ \t]*\r?$")
+DEFAULT_ADMIN_USERNAME = "CMCCAdmin"
+Credentials = tuple[str, str]
 
 
 def is_yes_response(response):
@@ -97,22 +109,64 @@ def save_config(config_file, host, mac_address):
     return saved_at
 
 
-def obtain_value_from_text(text):
-    matched_lines = []
+def read_telnet_response(telnet: Telnet, prompt: re.Pattern[bytes]) -> str:
+    index, _, data = telnet.expect([prompt], timeout=TELNET_TIMEOUT_SECONDS)
+    result = data.decode("utf-8", errors="replace")
+    logger.debug(f"Telnet Result:\n{result}")
+    if index < 0:
+        raise TimeoutError("Telnet closed or did not return the expected prompt.")
+    return result
 
-    if text is None:
-        return matched_lines
 
-    # 正则表达式匹配以 "get success!value=" 开头的行
-    success_value_pattern = re.compile(r'^get success!value=.*$')
+def run_telnet_command(telnet: Telnet, command: bytes) -> str:
+    telnet.write(command + b"\n")
+    return read_telnet_response(telnet, SHELL_PROMPT)
 
-    # 将输入的文本按行处理
-    for line in text.splitlines():
-        line = line.strip()
-        if line and success_value_pattern.match(line):
-            matched_lines.append(line)
 
-    return matched_lines
+def read_response_field(response: str, field: str) -> str:
+    match = re.search(
+        rf"(?m)^[ \t]*(?:Success![ \t]*)?{re.escape(field)}=([^\r\n]*)",
+        response,
+    )
+    return match.group(1).strip() if match else ""
+
+
+def read_factory_config(telnet: Telnet) -> Optional[Credentials]:
+    result = run_telnet_command(telnet, b"cat /flash/cfg/agentconf/factory.conf")
+    username = read_response_field(result, "TelecomAccount")
+    password = read_response_field(result, "TelecomPasswd")
+    return (username, password) if username and password else None
+
+
+def read_factory_cli(telnet: Telnet) -> Optional[Credentials]:
+    run_telnet_command(telnet, b"load_cli factory")
+    password = read_response_field(
+        run_telnet_command(telnet, b"show admin_pwd"), "admin_pwd"
+    )
+    if not password:
+        return None
+    username = read_response_field(
+        run_telnet_command(telnet, b"show admin_name"), "admin_name"
+    )
+    if not username:
+        username = DEFAULT_ADMIN_USERNAME
+        logger.warning(
+            f"Factory CLI returned a password without an account; using {username}."
+        )
+    return username, password
+
+
+def read_cfg_cmd(telnet: Telnet) -> Optional[Credentials]:
+    path = b"InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount"
+    username = read_response_field(
+        run_telnet_command(telnet, b"cfg_cmd get " + path + b".Username"),
+        "get success!value",
+    )
+    password = read_response_field(
+        run_telnet_command(telnet, b"cfg_cmd get " + path + b".Password"),
+        "get success!value",
+    )
+    return (username, password) if username and password else None
 
 
 class ModemManager:
@@ -120,7 +174,6 @@ class ModemManager:
         self.host = ""
         self.port = 23
         self.mac_address = ""
-        self.method = ""
 
     def set_host(self):
         host = input("Please enter the IP address of the modem (default:192.168.0.1): ") or "192.168.0.1"
@@ -166,96 +219,75 @@ class ModemManager:
         logger.error(f"No ARP entry found for host {self.host}.")
         return None
 
-    def enable_telnet(self):
+    def enable_telnet(self) -> bool:
         url = f"http://{self.host}/cgi-bin/telnetenable.cgi?telnetenable=1&key={self.mac_address}"
         logger.debug(f"Telnet Enable URL: {url}")
         try:
-            response = requests.get(url, timeout=5)
-        except (requests.exceptions.Timeout, requests.exceptions.RequestException):
-            logger.error("Failed to enable Telnet.")
+            response = requests.get(
+                url, timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=False
+            )
+        except requests.exceptions.RequestException as error:
+            logger.error(f"Telnet enable request failed: {error}")
             return False
-        if "if (1 == 1)" in response.text or "telnet开启" in response.text:
-            logger.info("Telnet has been successfully enabled.")
-            self.method = 0 if "if (1 == 1)" in response.text else 1
-            return True
-        else:
-            logger.error("Failed to enable Telnet.")
+        if response.status_code != HTTPStatus.OK:
+            logger.error(
+                f"Telnet enable request returned HTTP {response.status_code}; stopping."
+            )
             return False
+        try:
+            with socket.create_connection(
+                (self.host, self.port), timeout=TELNET_TIMEOUT_SECONDS
+            ):
+                pass
+        except OSError as error:
+            logger.error(
+                f"Cannot connect to Telnet at {self.host}:{self.port}: {error}"
+            )
+            return False
+        logger.info(
+            "Telnet enable request returned HTTP 200 and the Telnet port is reachable."
+        )
+        return True
 
-    def get_admin_password(self):
-        admin_password = None
-        admin_username = None
-        if self.method == 0:
-            username = "root"
-            password = f"Fh@{self.mac_address[-6:]}"
-            logger.debug(f"Using Username: {username}")
-            logger.debug(f"Using Password: {password}")
-            try:
-                with Telnet(self.host, self.port) as telnet:
-                    telnet.read_until(b"login: ")
-                    telnet.write(username.encode('ascii') + b"\n")
-                    telnet.read_until(b"Password: ")
-                    telnet.write(password.encode('ascii') + b"\n")
-                    telnet.write(b"cat /flash/cfg/agentconf/factory.conf\n")
-                    telnet.write(b"exit\n")
-                    result = telnet.read_all().decode('ascii')
-            except Exception as error:
-                logger.error(f"Telnet connection failed: {error}")
-                return None
-            logger.debug(f"Telnet Result:\n{result}")
-            try:
-                admin_username = re.search(r'TelecomAccount=(.*)', result).group(1).strip()
-                admin_password = re.search(r'TelecomPasswd=(.*)', result).group(1).strip()
-            except AttributeError as error:
-                logger.error(f"Failed to parse factory.conf: {error}")
-                return None
-        elif self.method == 1:
-            username = "admin"
-            password = f"Fh@{self.mac_address[-6:]}"
-            logger.debug(f"Using Username: {username}")
-            logger.debug(f"Using Password: {password}")
-            try:
-                with Telnet(self.host, self.port) as telnet:
-                    telnet.read_until(b"login:")
-                    telnet.write(username.encode('utf-8') + b"\n")
-                    telnet.read_until(b"Password:")
-                    telnet.write(password.encode('utf-8') + b"\n")
-                    time.sleep(0.5)
-                    telnet.write(b"load_cli factory\n")
-                    time.sleep(0.5)
-                    telnet.write(b"show admin_pwd\n")
-                    time.sleep(0.5)
-                    telnet.write(b"show admin_name\n")
-                    time.sleep(0.5)
-                    telnet.write(b"exit\n")
-                    time.sleep(0.5)
-                    telnet.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username\n")
-                    time.sleep(0.5)
-                    telnet.write(b"cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Password\n")
-                    time.sleep(0.5)
-                    telnet.write(b"exit\n")
-                    result = telnet.read_all().decode('utf-8')
-            except Exception as error:
-                logger.error(f"Telnet connection failed: {error}")
-                return None
-            logger.debug(f"Telnet Result:\n{result}")
-            try:
-                admin_username = re.search(r'admin_name=(.*)', result).group(1).strip()
-                admin_password = re.search(r'admin_pwd=(.*)', result).group(1).strip()
-            except AttributeError as error:
-                logger.error(f"Failed to obtain Admin Username and Password form factory mode: {error}")
-                if "Unknown command" in result:
-                    logger.debug("Entering experimental mode. This mode is based on tutorial methods and has not been fully tested. If you successfully retrieve the results, please provide feedback to the author via an issue report.")
-                    obtained_values = obtain_value_from_text(result)
-                    if isinstance(obtained_values, list) and len(obtained_values) == 2:
-                        admin_username = obtained_values[0]
-                        admin_password = obtained_values[1]
-                    else:
-                        logger.error("Experimental mode failed.")
-                        return None
-                else:
-                    return None
-        return admin_username, admin_password
+    def get_admin_password(self) -> Optional[Credentials]:
+        password = f"Fh@{self.mac_address[-6:]}"
+        readers = (
+            ("factory.conf", read_factory_config),
+            ("factory CLI", read_factory_cli),
+            ("cfg_cmd", read_cfg_cmd),
+        )
+        for username in ("root", "admin"):
+            for reader_name, reader in readers:
+                logger.info(f"Trying Telnet user {username} with {reader_name}.")
+                authenticated = False
+                try:
+                    with Telnet(
+                        self.host, self.port, timeout=TELNET_TIMEOUT_SECONDS
+                    ) as telnet:
+                        read_telnet_response(telnet, LOGIN_PROMPT)
+                        telnet.write(username.encode("ascii") + b"\n")
+                        read_telnet_response(telnet, PASSWORD_PROMPT)
+                        telnet.write(password.encode("ascii") + b"\n")
+                        read_telnet_response(telnet, SHELL_PROMPT)
+                        authenticated = True
+                        credentials = reader(telnet)
+                except (OSError, EOFError) as error:
+                    logger.warning(
+                        f"Telnet attempt failed for {username} with {reader_name}: {error}"
+                    )
+                    if not authenticated:
+                        break
+                    continue
+                if credentials:
+                    logger.info(
+                        f"Retrieved administrator credentials using {username} with {reader_name}."
+                    )
+                    return credentials
+                logger.debug(
+                    f"No administrator credentials returned by {username} with {reader_name}."
+                )
+        logger.error("No Telnet username and retrieval method succeeded.")
+        return None
 
     def manage_modem(self):
         if self.enable_telnet():
