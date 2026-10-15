@@ -88,6 +88,10 @@ python -m pytest -q
 
 Automated tests simulate HTTP, ARP, and Telnet interactions, including a local TCP server and replay of [sanitized device responses](tests/fixtures/README.md). The recordings cover rejected authentication, missing commands and files, delayed prompts, and session exit. They include a regression for an extra prompt left behind during timeout recovery. Tests do not require a physical modem.
 
+## Code structure
+
+The module-level `main()` function handles command-line input, configuration, and output. Device operations receive explicit arguments: `get_mac_address(host)` detects the MAC, and `retrieve_credentials(host, mac_address, port)` runs `enable_telnet()` before `get_admin_credentials()`. Callers supply a validated IPv4 address and normalized MAC; the port defaults to `TELNET_PORT`. Telnet connections remain scoped to their login attempts, and `Credentials` represents complete or partial results.
+
 ## 许可证
 
 <p align="center">

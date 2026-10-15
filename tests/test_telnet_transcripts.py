@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from main import (
     SHELL_PROMPT,
     Credentials,
-    ModemManager,
+    get_admin_credentials,
     read_cfg_cmd,
     read_factory_cli,
     read_telnet_response,
@@ -92,16 +92,13 @@ class RealTranscriptTests(unittest.TestCase):
         admin = replay_session(
             [entry for entry in EXCHANGES if entry.username == "admin"]
         )
-        manager = ModemManager()
-        manager.host = "192.168.0.1"
-        manager.mac_address = "AABBCCDDEEFF"
         with (
             patch("main.Telnet", side_effect=[root, admin]) as connect,
             patch("main.read_factory_config", return_value=Credentials("", "")),
             patch("main.read_cfg_cmd", return_value=Credentials("", "")),
             patch("main.read_factory_cli", return_value=Credentials("", "")),
         ):
-            self.assertIsNone(manager.get_admin_password())
+            self.assertIsNone(get_admin_credentials("192.168.0.1", "AABBCCDDEEFF"))
         self.assertEqual(connect.call_count, 2)
         self.assertEqual(
             [call.args[0] for call in admin.write.call_args_list],

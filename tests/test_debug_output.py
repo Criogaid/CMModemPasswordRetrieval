@@ -1,13 +1,11 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from main import SHELL_PROMPT, ModemManager, read_telnet_response
+from main import SHELL_PROMPT, get_mac_address, read_telnet_response
 
 
 class DebugOutputTests(unittest.TestCase):
     def test_arp_output_is_logged_in_full(self):
-        manager = ModemManager()
-        manager.host = "192.168.0.1"
         arp_result = (
             "Interface: 192.168.0.2 --- 0x7\n"
             "  Internet Address      Physical Address      Type\n"
@@ -21,7 +19,7 @@ class DebugOutputTests(unittest.TestCase):
             ),
             patch("main.logger.debug") as debug_log,
         ):
-            mac_address = manager.get_mac_address()
+            mac_address = get_mac_address("192.168.0.1")
 
         self.assertEqual(mac_address, "FFFFFFFFFFFF")
         debug_log.assert_called_once_with(f"ARP Result:\n{arp_result}")

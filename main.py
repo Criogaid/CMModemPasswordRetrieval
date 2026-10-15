@@ -25,6 +25,7 @@ HOST_PATTERN = re.compile(
 MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
 # Keep the discovery order in sync with README.md under "运行".
 DEFAULT_HOSTS = ("192.168.0.1", "192.168.1.1")
+TELNET_PORT = 23
 HTTP_TIMEOUT_SECONDS = 5
 TELNET_TIMEOUT_SECONDS = 5
 LOGIN_PROMPT = re.compile(rb"login:\s*", re.IGNORECASE)
@@ -191,197 +192,205 @@ def read_cfg_cmd(telnet: Telnet) -> Credentials:
     return Credentials(username, password)
 
 
-class ModemManager:
-    def __init__(self):
-        self.host = ""
-        self.port = 23
-        self.mac_address = ""
+def prompt_host() -> str:
+    """Return the supplied IPv4 address, or an empty string for auto-detection."""
+    host = input(
+        f"Enter the modem IPv4 address (Enter to try {' then '.join(DEFAULT_HOSTS)}): "
+    ).strip()
+    if host and not validate_host(host):
+        raise ValueError("Invalid host address.")
+    return host
 
-    def set_host(self) -> str:
-        """Return the supplied IPv4 address, or an empty string for auto-detection."""
-        host = input(
-            f"Enter the modem IPv4 address (Enter to try {' then '.join(DEFAULT_HOSTS)}): "
-        ).strip()
-        if host and not validate_host(host):
-            raise ValueError("Invalid host address.")
-        self.host = host
-        return self.host
 
-    def get_mac_address(self):
-        # 主动探测会促使 Windows 刷新目标 IP 的 ARP 条目。
-        if not is_host_reachable(self.host):
-            logger.error(f"Host {self.host} is unreachable.")
-            return None
-
-        try:
-            arp_output = subprocess.check_output("arp -a", shell=True)
-            arp_result = arp_output.decode('utf-8')
-        except UnicodeDecodeError:
-            arp_result = arp_output.decode('gbk')
-        except Exception as error:
-            logger.error(f"Please Check your host address or Send the following error to the author:\r\n{error}")
-            return None
-        if not arp_result:
-            logger.error("Failed to obtain ARP table.")
-            return None
-        logger.debug(f"ARP Result:\n{arp_result}")
-        lines = arp_result.split("\n")
-        for line in lines:
-            fields = re.split(r'\s+', line.strip())
-            if not fields or fields[0] != self.host:
-                continue
-
-            for field in fields[1:]:
-                normalized_mac_address = normalize_mac_address(field)
-                if normalized_mac_address:
-                    logger.info(f"MAC Address obtained successfully: {normalized_mac_address}")
-                    return normalized_mac_address
-
-            logger.error(f"Invalid ARP table entry: {line.strip()}")
-            return None
-
-        logger.error(f"No ARP entry found for host {self.host}.")
+def get_mac_address(host: str) -> Optional[str]:
+    # 主动探测会促使 Windows 刷新目标 IP 的 ARP 条目。
+    if not is_host_reachable(host):
+        logger.error(f"Host {host} is unreachable.")
         return None
 
-    def enable_telnet(self) -> bool:
-        url = f"http://{self.host}/cgi-bin/telnetenable.cgi?telnetenable=1&key={self.mac_address}"
-        logger.debug(f"Telnet Enable URL: {url}")
-        try:
-            response = requests.get(
-                url, timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=False
-            )
-        except requests.exceptions.RequestException as error:
-            logger.error(f"Telnet enable request failed: {error}")
-            return False
-        if response.status_code != HTTPStatus.OK:
-            logger.error(
-                f"Telnet enable request returned HTTP {response.status_code}; stopping."
-            )
-            return False
-        try:
-            with socket.create_connection(
-                (self.host, self.port), timeout=TELNET_TIMEOUT_SECONDS
-            ):
-                pass
-        except OSError as error:
-            logger.error(
-                f"Cannot connect to Telnet at {self.host}:{self.port}: {error}"
-            )
-            return False
-        logger.info(
-            "Telnet enable request returned HTTP 200 and the Telnet port is reachable."
+    try:
+        arp_output = subprocess.check_output("arp -a", shell=True)
+        arp_result = arp_output.decode("utf-8")
+    except UnicodeDecodeError:
+        arp_result = arp_output.decode("gbk")
+    except Exception as error:
+        logger.error(
+            f"Please Check your host address or Send the following error to the author:\r\n{error}"
         )
-        return True
-
-    def get_admin_password(self) -> Optional[Credentials]:
-        password = f"Fh@{self.mac_address[-6:]}"
-        partial = None
-        readers = (
-            ("factory.conf", read_factory_config),
-            ("cfg_cmd", read_cfg_cmd),
-            ("factory CLI", read_factory_cli),
-        )
-        for username in ("root", "admin"):
-            logger.info(f"Trying Telnet user {username}.")
-            try:
-                with Telnet(
-                    self.host, self.port, timeout=TELNET_TIMEOUT_SECONDS
-                ) as telnet:
-                    read_telnet_response(telnet, LOGIN_PROMPT)
-                    telnet.write(username.encode("ascii") + b"\n")
-                    read_telnet_response(telnet, PASSWORD_PROMPT)
-                    telnet.write(password.encode("ascii") + b"\n")
-                    read_telnet_response(telnet, SHELL_PROMPT)
-                    confirm_telnet_interactive(telnet)
-                    logger.info(f"Interactive CLI confirmed for {username}.")
-                    for reader_name, reader in readers:
-                        logger.info(
-                            f"Trying {reader_name} in the existing {username} session."
-                        )
-                        credentials = reader(telnet)
-                        if credentials.complete:
-                            logger.info(
-                                f"Retrieved administrator credentials using {username} with {reader_name}."
-                            )
-                            return credentials
-                        if credentials.password or (
-                            credentials.username and partial is None
-                        ):
-                            partial = credentials
-                        logger.debug(
-                            f"No complete credentials returned by {reader_name}."
-                        )
-            except (OSError, EOFError) as error:
-                logger.warning(f"Telnet session ended for {username}: {error}")
-        if partial is None:
-            logger.error("No Telnet username and retrieval method succeeded.")
-        return partial
-
-    def manage_modem(self) -> Optional[Credentials]:
-        if self.enable_telnet():
-            return self.get_admin_password()
         return None
+    if not arp_result:
+        logger.error("Failed to obtain ARP table.")
+        return None
+    logger.debug(f"ARP Result:\n{arp_result}")
+    lines = arp_result.split("\n")
+    for line in lines:
+        fields = re.split(r"\s+", line.strip())
+        if not fields or fields[0] != host:
+            continue
 
-    def main(self):
-        config_file = os.path.join(sys.path[0], "CMCCModelConfig.json")
-        config_loaded = False
-        if os.path.exists(config_file):
-            if is_yes_response(input("Do you want to use the old Configuration file? [Y/Others] ")):
-                logger.info("Reading Config...")
-                try:
-                    config = load_config(config_file)
-                    self.host = config["host"]
-                    self.mac_address = config["mac_address"]
-                    logger.info(f"Last Config: {config_file} on {config['date']}")
-                    config_loaded = True
-                except Exception:
-                    logger.error(f"Failed to read configuration. Please delete: {config_file} and try again. Error details below:")
-                    raise
-        if not config_loaded:
-            host = self.set_host()
-            for candidate in (host,) if host else DEFAULT_HOSTS:
-                self.host = candidate
-                logger.info(f"Checking modem at {self.host}.")
-                self.mac_address = self.get_mac_address()
-                if self.mac_address:
-                    break
-            if not self.mac_address:
-                logger.error("Cannot continue without a reachable host and a valid ARP entry.")
-                exit(0)
-        credentials = self.manage_modem()
-        if credentials is not None:
-            if credentials.complete:
+        for field in fields[1:]:
+            normalized_mac_address = normalize_mac_address(field)
+            if normalized_mac_address:
                 logger.info(
-                    f"Successfully obtained Admin Username and Password for {self.host}!"
+                    f"MAC Address obtained successfully: {normalized_mac_address}"
                 )
-            else:
-                logger.warning("Only partial administrator credentials were retrieved.")
-            if credentials.username:
-                logger.info(f"Username: {credentials.username}")
-            else:
-                logger.warning("Username: unconfirmed")
-            if credentials.password:
-                logger.info(f"Password: {credentials.password}")
-            else:
-                logger.warning("Password: unconfirmed")
-            if not credentials.complete:
-                exit(0)
-        else:
-            logger.error("Failed to obtain Admin Username and Password.")
-            logger.info(
-                "Please follow the manual confirmation steps at "
-                "`https://www.bilibili.com/read/cv21044770/` and modify the code if necessary.")
+                return normalized_mac_address
+
+        logger.error(f"Invalid ARP table entry: {line.strip()}")
+        return None
+
+    logger.error(f"No ARP entry found for host {host}.")
+    return None
+
+
+def enable_telnet(host: str, mac_address: str, port: int = TELNET_PORT) -> bool:
+    url = f"http://{host}/cgi-bin/telnetenable.cgi?telnetenable=1&key={mac_address}"
+    logger.debug(f"Telnet Enable URL: {url}")
+    try:
+        response = requests.get(
+            url, timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=False
+        )
+    except requests.exceptions.RequestException as error:
+        logger.error(f"Telnet enable request failed: {error}")
+        return False
+    if response.status_code != HTTPStatus.OK:
+        logger.error(
+            f"Telnet enable request returned HTTP {response.status_code}; stopping."
+        )
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=TELNET_TIMEOUT_SECONDS):
+            pass
+    except OSError as error:
+        logger.error(f"Cannot connect to Telnet at {host}:{port}: {error}")
+        return False
+    logger.info(
+        "Telnet enable request returned HTTP 200 and the Telnet port is reachable."
+    )
+    return True
+
+
+def get_admin_credentials(
+    host: str, mac_address: str, port: int = TELNET_PORT
+) -> Optional[Credentials]:
+    password = f"Fh@{mac_address[-6:]}"
+    partial = None
+    readers = (
+        ("factory.conf", read_factory_config),
+        ("cfg_cmd", read_cfg_cmd),
+        ("factory CLI", read_factory_cli),
+    )
+    for username in ("root", "admin"):
+        logger.info(f"Trying Telnet user {username}.")
+        try:
+            with Telnet(host, port, timeout=TELNET_TIMEOUT_SECONDS) as telnet:
+                read_telnet_response(telnet, LOGIN_PROMPT)
+                telnet.write(username.encode("ascii") + b"\n")
+                read_telnet_response(telnet, PASSWORD_PROMPT)
+                telnet.write(password.encode("ascii") + b"\n")
+                read_telnet_response(telnet, SHELL_PROMPT)
+                confirm_telnet_interactive(telnet)
+                logger.info(f"Interactive CLI confirmed for {username}.")
+                for reader_name, reader in readers:
+                    logger.info(
+                        f"Trying {reader_name} in the existing {username} session."
+                    )
+                    credentials = reader(telnet)
+                    if credentials.complete:
+                        logger.info(
+                            f"Retrieved administrator credentials using {username} with {reader_name}."
+                        )
+                        return credentials
+                    if credentials.password or (
+                        credentials.username and partial is None
+                    ):
+                        partial = credentials
+                    logger.debug(f"No complete credentials returned by {reader_name}.")
+        except (OSError, EOFError) as error:
+            logger.warning(f"Telnet session ended for {username}: {error}")
+    if partial is None:
+        logger.error("No Telnet username and retrieval method succeeded.")
+    return partial
+
+
+def retrieve_credentials(
+    host: str, mac_address: str, port: int = TELNET_PORT
+) -> Optional[Credentials]:
+    if enable_telnet(host, mac_address, port):
+        return get_admin_credentials(host, mac_address, port)
+    return None
+
+
+def main() -> None:
+    config_file = os.path.join(sys.path[0], "CMCCModelConfig.json")
+    if os.path.exists(config_file) and is_yes_response(
+        input("Do you want to use the old Configuration file? [Y/Others] ")
+    ):
+        logger.info("Reading Config...")
+        try:
+            config = load_config(config_file)
+            host = config["host"]
+            mac_address = config["mac_address"]
+            logger.info(f"Last Config: {config_file} on {config['date']}")
+        except Exception:
+            logger.error(
+                f"Failed to read configuration. Please delete: {config_file} and try again. Error details below:"
+            )
+            raise
+    else:
+        host = prompt_host()
+        mac_address = None
+        for candidate in (host,) if host else DEFAULT_HOSTS:
+            host = candidate
+            logger.info(f"Checking modem at {host}.")
+            mac_address = get_mac_address(host)
+            if mac_address:
+                break
+        if not mac_address:
+            logger.error(
+                "Cannot continue without a reachable host and a valid ARP entry."
+            )
             exit(0)
-        if self.host and self.mac_address and is_yes_response(input("Do you want to save the configuration? [Y/Others] ")):
-            try:
-                saved_at = save_config(config_file, self.host, self.mac_address)
-                logger.info(f"Save Config: {config_file} on {saved_at}")
-            except Exception:
-                logger.error(f"Failed to write configuration. Please check read/write permissions for {config_file}. Error details below:")
-                raise
+    credentials = retrieve_credentials(host, mac_address)
+    if credentials is not None:
+        if credentials.complete:
+            logger.info(
+                f"Successfully obtained Admin Username and Password for {host}!"
+            )
+        else:
+            logger.warning("Only partial administrator credentials were retrieved.")
+        if credentials.username:
+            logger.info(f"Username: {credentials.username}")
+        else:
+            logger.warning("Username: unconfirmed")
+        if credentials.password:
+            logger.info(f"Password: {credentials.password}")
+        else:
+            logger.warning("Password: unconfirmed")
+        if not credentials.complete:
+            exit(0)
+    else:
+        logger.error("Failed to obtain Admin Username and Password.")
+        logger.info(
+            "Please follow the manual confirmation steps at "
+            "`https://www.bilibili.com/read/cv21044770/` and modify the code if necessary."
+        )
         exit(0)
+    if (
+        host
+        and mac_address
+        and is_yes_response(input("Do you want to save the configuration? [Y/Others] "))
+    ):
+        try:
+            saved_at = save_config(config_file, host, mac_address)
+            logger.info(f"Save Config: {config_file} on {saved_at}")
+        except Exception:
+            logger.error(
+                f"Failed to write configuration. Please check read/write permissions for {config_file}. Error details below:"
+            )
+            raise
+    exit(0)
 
 
 if __name__ == "__main__":
-    manager = ModemManager()
-    manager.main()
+    main()

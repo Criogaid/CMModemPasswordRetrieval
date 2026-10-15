@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
-from main import Credentials, ModemManager
+from main import Credentials, get_admin_credentials, retrieve_credentials
 
 CONFIG_COMMAND = b"cat /flash/cfg/agentconf/factory.conf\n"
 FACTORY_COMMAND = b"load_cli factory\n"
@@ -56,11 +56,11 @@ def telnet_session(responses=None, login_prompt=b"Login: ", login_result=b"$ "):
 
 class TelnetGateTests(unittest.TestCase):
     def setUp(self):
-        self.manager = ModemManager()
-        self.manager.host = "192.168.1.1"
-        self.manager.mac_address = "AABBCCDDEEFF"
+        self.host = "192.168.1.1"
+        self.mac_address = "AABBCCDDEEFF"
 
     def test_http_200_and_open_port_allow_retrieval_regardless_of_body(self):
+        telnet_port = 2323
         for body in ("", "unexpected page", "if (1 == 1)", "telnet开启"):
             with (
                 self.subTest(body=body),
@@ -69,23 +69,25 @@ class TelnetGateTests(unittest.TestCase):
                     return_value=MagicMock(status_code=200, text=body),
                 ) as request,
                 patch("main.socket.create_connection") as connect,
-                patch.object(
-                    self.manager,
-                    "get_admin_password",
+                patch(
+                    "main.get_admin_credentials",
                     return_value=Credentials("account", "secret"),
                 ) as retrieve,
             ):
                 self.assertEqual(
-                    self.manager.manage_modem(), Credentials("account", "secret")
+                    retrieve_credentials(self.host, self.mac_address, telnet_port),
+                    Credentials("account", "secret"),
                 )
                 request.assert_called_once()
                 self.assertIn("key=AABBCCDDEEFF", request.call_args.args[0])
                 self.assertGreater(request.call_args.kwargs["timeout"], 0)
                 connect.assert_called_once()
-                self.assertEqual(connect.call_args.args[0], (self.manager.host, 23))
+                self.assertEqual(connect.call_args.args[0], (self.host, telnet_port))
                 self.assertGreater(connect.call_args.kwargs["timeout"], 0)
                 connect.return_value.__exit__.assert_called_once()
-                retrieve.assert_called_once()
+                retrieve.assert_called_once_with(
+                    self.host, self.mac_address, telnet_port
+                )
 
     def test_non_200_stops_before_connecting_or_retrieving(self):
         for status in (204, 302, 401, 500):
@@ -96,9 +98,9 @@ class TelnetGateTests(unittest.TestCase):
                     return_value=MagicMock(status_code=status, text="telnet开启"),
                 ),
                 patch("main.socket.create_connection") as connect,
-                patch.object(self.manager, "get_admin_password") as retrieve,
+                patch("main.get_admin_credentials") as retrieve,
             ):
-                self.assertFalse(self.manager.manage_modem())
+                self.assertFalse(retrieve_credentials(self.host, self.mac_address))
                 connect.assert_not_called()
                 retrieve.assert_not_called()
 
@@ -106,9 +108,9 @@ class TelnetGateTests(unittest.TestCase):
         with (
             patch("main.requests.get", side_effect=requests.exceptions.Timeout),
             patch("main.socket.create_connection") as connect,
-            patch.object(self.manager, "get_admin_password") as retrieve,
+            patch("main.get_admin_credentials") as retrieve,
         ):
-            self.assertFalse(self.manager.manage_modem())
+            self.assertFalse(retrieve_credentials(self.host, self.mac_address))
             connect.assert_not_called()
             retrieve.assert_not_called()
 
@@ -116,17 +118,16 @@ class TelnetGateTests(unittest.TestCase):
         with (
             patch("main.requests.get", return_value=MagicMock(status_code=200)),
             patch("main.socket.create_connection", side_effect=ConnectionRefusedError),
-            patch.object(self.manager, "get_admin_password") as retrieve,
+            patch("main.get_admin_credentials") as retrieve,
         ):
-            self.assertFalse(self.manager.manage_modem())
+            self.assertFalse(retrieve_credentials(self.host, self.mac_address))
             retrieve.assert_not_called()
 
 
 class TelnetRetrievalTests(unittest.TestCase):
     def setUp(self):
-        self.manager = ModemManager()
-        self.manager.host = "192.168.1.1"
-        self.manager.mac_address = "AABBCCDDEEFF"
+        self.host = "192.168.1.1"
+        self.mac_address = "AABBCCDDEEFF"
         self.success_responses = (
             {CONFIG_COMMAND: b"TelecomAccount=account\r\nTelecomPasswd=p=a#ss\r\n# "},
             {
@@ -165,7 +166,7 @@ class TelnetRetrievalTests(unittest.TestCase):
                     sessions.append(accepted)
                     with patch("main.Telnet", side_effect=sessions) as connect:
                         self.assertEqual(
-                            self.manager.get_admin_password(),
+                            get_admin_credentials(self.host, self.mac_address),
                             Credentials("account", "p=a#ss"),
                         )
                     self.assertEqual(connect.call_count, len(sessions))
@@ -185,7 +186,8 @@ class TelnetRetrievalTests(unittest.TestCase):
         accepted = telnet_session(self.success_responses[0])
         with patch("main.Telnet", side_effect=[rejected, accepted]):
             self.assertEqual(
-                self.manager.get_admin_password(), Credentials("account", "p=a#ss")
+                get_admin_credentials(self.host, self.mac_address),
+                Credentials("account", "p=a#ss"),
             )
         self.assertEqual(rejected.write.call_count, 2)
         self.assertEqual(accepted.write.call_args_list[0].args[0], b"admin\n")
@@ -202,13 +204,14 @@ class TelnetRetrievalTests(unittest.TestCase):
                 ),
             ):
                 self.assertEqual(
-                    self.manager.get_admin_password(), Credentials("account", "p=a#ss")
+                    get_admin_credentials(self.host, self.mac_address),
+                    Credentials("account", "p=a#ss"),
                 )
 
     def test_cli_must_respond_to_blank_line_before_queries(self):
         sessions = [telnet_session({b"\n": b""}) for _ in range(2)]
         with patch("main.Telnet", side_effect=sessions):
-            self.assertIsNone(self.manager.get_admin_password())
+            self.assertIsNone(get_admin_credentials(self.host, self.mac_address))
         for session in sessions:
             writes = [call.args[0] for call in session.write.call_args_list]
             self.assertEqual(len(writes), 3)
@@ -220,7 +223,8 @@ class TelnetRetrievalTests(unittest.TestCase):
         session = telnet_session(responses)
         with patch("main.Telnet", return_value=session) as connect:
             self.assertEqual(
-                self.manager.get_admin_password(), Credentials("account", "p=a#ss")
+                get_admin_credentials(self.host, self.mac_address),
+                Credentials("account", "p=a#ss"),
             )
         connect.assert_called_once()
         writes = [call.args[0] for call in session.write.call_args_list]
@@ -244,7 +248,7 @@ class TelnetRetrievalTests(unittest.TestCase):
                 accepted = telnet_session(self.success_responses[0])
                 with patch("main.Telnet", side_effect=[failed, accepted]) as connect:
                     self.assertEqual(
-                        self.manager.get_admin_password(),
+                        get_admin_credentials(self.host, self.mac_address),
                         Credentials("account", "p=a#ss"),
                     )
                 self.assertEqual(connect.call_count, 2)
@@ -257,7 +261,7 @@ class TelnetRetrievalTests(unittest.TestCase):
     def test_all_unsupported_readers_use_only_two_logins(self):
         sessions = [telnet_session() for _ in range(2)]
         with patch("main.Telnet", side_effect=sessions) as connect:
-            self.assertIsNone(self.manager.get_admin_password())
+            self.assertIsNone(get_admin_credentials(self.host, self.mac_address))
         self.assertEqual(connect.call_count, 2)
 
     def test_partial_password_is_preserved_without_guessing_account(self):
@@ -266,7 +270,7 @@ class TelnetRetrievalTests(unittest.TestCase):
         with patch(
             "main.Telnet", side_effect=[telnet_session(responses), telnet_session()]
         ):
-            result = self.manager.get_admin_password()
+            result = get_admin_credentials(self.host, self.mac_address)
         self.assertEqual(result, Credentials("", "p=a#ss"))
         self.assertFalse(result.complete)
 
@@ -279,7 +283,8 @@ class TelnetRetrievalTests(unittest.TestCase):
             "main.Telnet", side_effect=[telnet_session(responses), telnet_session()]
         ):
             self.assertEqual(
-                self.manager.get_admin_password(), Credentials("", "second-password")
+                get_admin_credentials(self.host, self.mac_address),
+                Credentials("", "second-password"),
             )
 
     def test_complete_result_after_partial_result_wins(self):
@@ -287,7 +292,8 @@ class TelnetRetrievalTests(unittest.TestCase):
         responses[CONFIG_COMMAND] = b"TelecomPasswd=earlier-password\r\n# "
         with patch("main.Telnet", return_value=telnet_session(responses)) as connect:
             self.assertEqual(
-                self.manager.get_admin_password(), Credentials("account", "p=a#ss")
+                get_admin_credentials(self.host, self.mac_address),
+                Credentials("account", "p=a#ss"),
             )
         connect.assert_called_once()
 
@@ -301,14 +307,14 @@ class TelnetRetrievalTests(unittest.TestCase):
         with patch(
             "main.Telnet", side_effect=[telnet_session(responses) for _ in range(2)]
         ):
-            self.assertIsNone(self.manager.get_admin_password())
+            self.assertIsNone(get_admin_credentials(self.host, self.mac_address))
 
     def test_incomplete_login_prompt_never_sends_credentials(self):
         sessions = [
             telnet_session(login_prompt=b"Starting device...") for _ in range(2)
         ]
         with patch("main.Telnet", side_effect=sessions):
-            self.assertIsNone(self.manager.get_admin_password())
+            self.assertIsNone(get_admin_credentials(self.host, self.mac_address))
         for session in sessions:
             session.write.assert_not_called()
             session.__exit__.assert_called_once()
@@ -360,11 +366,10 @@ class TelnetSocketTests(unittest.TestCase):
             )
             worker.start()
             try:
-                manager = ModemManager()
-                manager.host, manager.port = server.server_address
-                manager.mac_address = "AABBCCDDEEFF"
+                host, port = server.server_address
                 self.assertEqual(
-                    manager.get_admin_password(), Credentials("account", "p=a#ss#")
+                    get_admin_credentials(host, "AABBCCDDEEFF", port),
+                    Credentials("account", "p=a#ss#"),
                 )
             finally:
                 server.shutdown()
