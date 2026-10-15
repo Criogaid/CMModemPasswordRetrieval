@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Optional
 
@@ -30,8 +31,16 @@ LOGIN_PROMPT = re.compile(rb"login:\s*", re.IGNORECASE)
 PASSWORD_PROMPT = re.compile(rb"password:\s*", re.IGNORECASE)
 # Exclude assignments so a password ending in '#' is not mistaken for a prompt.
 SHELL_PROMPT = re.compile(rb"(?m)^[^\r\n=]*[#$>][ \t]*\r?$")
-DEFAULT_ADMIN_USERNAME = "CMCCAdmin"
-Credentials = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class Credentials:
+    username: str
+    password: str
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.username and self.password)
 
 
 def is_yes_response(response):
@@ -116,13 +125,30 @@ def read_telnet_response(telnet: Telnet, prompt: re.Pattern[bytes]) -> str:
     result = data.decode("utf-8", errors="replace")
     logger.debug(f"Telnet Result:\n{result}")
     if index < 0:
+        if telnet.eof:
+            raise EOFError("Telnet closed before returning the expected prompt.")
         raise TimeoutError("Telnet closed or did not return the expected prompt.")
     return result
 
 
+def confirm_telnet_interactive(telnet: Telnet) -> None:
+    telnet.write(b"\n")
+    read_telnet_response(telnet, SHELL_PROMPT)
+
+
 def run_telnet_command(telnet: Telnet, command: bytes) -> str:
     telnet.write(command + b"\n")
-    return read_telnet_response(telnet, SHELL_PROMPT)
+    try:
+        return read_telnet_response(telnet, SHELL_PROMPT)
+    except TimeoutError:
+        logger.warning(
+            "Command response timed out; waiting once for completion before checking CLI interaction."
+        )
+        # Drain the original command's prompt before creating another with an empty line.
+        read_telnet_response(telnet, SHELL_PROMPT)
+        confirm_telnet_interactive(telnet)
+        # A recovered prompt does not make an incomplete command response usable.
+        return ""
 
 
 def read_response_field(response: str, field: str) -> str:
@@ -133,32 +159,26 @@ def read_response_field(response: str, field: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def read_factory_config(telnet: Telnet) -> Optional[Credentials]:
+def read_factory_config(telnet: Telnet) -> Credentials:
     result = run_telnet_command(telnet, b"cat /flash/cfg/agentconf/factory.conf")
-    username = read_response_field(result, "TelecomAccount")
-    password = read_response_field(result, "TelecomPasswd")
-    return (username, password) if username and password else None
-
-
-def read_factory_cli(telnet: Telnet) -> Optional[Credentials]:
-    run_telnet_command(telnet, b"load_cli factory")
-    password = read_response_field(
-        run_telnet_command(telnet, b"show admin_pwd"), "admin_pwd"
+    return Credentials(
+        read_response_field(result, "TelecomAccount"),
+        read_response_field(result, "TelecomPasswd"),
     )
-    if not password:
-        return None
+
+
+def read_factory_cli(telnet: Telnet) -> Credentials:
+    run_telnet_command(telnet, b"load_cli factory")
     username = read_response_field(
         run_telnet_command(telnet, b"show admin_name"), "admin_name"
     )
-    if not username:
-        username = DEFAULT_ADMIN_USERNAME
-        logger.warning(
-            f"Factory CLI returned a password without an account; using {username}."
-        )
-    return username, password
+    password = read_response_field(
+        run_telnet_command(telnet, b"show admin_pwd"), "admin_pwd"
+    )
+    return Credentials(username, password)
 
 
-def read_cfg_cmd(telnet: Telnet) -> Optional[Credentials]:
+def read_cfg_cmd(telnet: Telnet) -> Credentials:
     path = b"InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount"
     username = read_response_field(
         run_telnet_command(telnet, b"cfg_cmd get " + path + b".Username"),
@@ -168,7 +188,7 @@ def read_cfg_cmd(telnet: Telnet) -> Optional[Credentials]:
         run_telnet_command(telnet, b"cfg_cmd get " + path + b".Password"),
         "get success!value",
     )
-    return (username, password) if username and password else None
+    return Credentials(username, password)
 
 
 class ModemManager:
@@ -255,49 +275,52 @@ class ModemManager:
 
     def get_admin_password(self) -> Optional[Credentials]:
         password = f"Fh@{self.mac_address[-6:]}"
+        partial = None
         readers = (
             ("factory.conf", read_factory_config),
-            ("factory CLI", read_factory_cli),
             ("cfg_cmd", read_cfg_cmd),
+            ("factory CLI", read_factory_cli),
         )
         for username in ("root", "admin"):
-            for reader_name, reader in readers:
-                logger.info(f"Trying Telnet user {username} with {reader_name}.")
-                authenticated = False
-                try:
-                    with Telnet(
-                        self.host, self.port, timeout=TELNET_TIMEOUT_SECONDS
-                    ) as telnet:
-                        read_telnet_response(telnet, LOGIN_PROMPT)
-                        telnet.write(username.encode("ascii") + b"\n")
-                        read_telnet_response(telnet, PASSWORD_PROMPT)
-                        telnet.write(password.encode("ascii") + b"\n")
-                        read_telnet_response(telnet, SHELL_PROMPT)
-                        authenticated = True
+            logger.info(f"Trying Telnet user {username}.")
+            try:
+                with Telnet(
+                    self.host, self.port, timeout=TELNET_TIMEOUT_SECONDS
+                ) as telnet:
+                    read_telnet_response(telnet, LOGIN_PROMPT)
+                    telnet.write(username.encode("ascii") + b"\n")
+                    read_telnet_response(telnet, PASSWORD_PROMPT)
+                    telnet.write(password.encode("ascii") + b"\n")
+                    read_telnet_response(telnet, SHELL_PROMPT)
+                    confirm_telnet_interactive(telnet)
+                    logger.info(f"Interactive CLI confirmed for {username}.")
+                    for reader_name, reader in readers:
+                        logger.info(
+                            f"Trying {reader_name} in the existing {username} session."
+                        )
                         credentials = reader(telnet)
-                except (OSError, EOFError) as error:
-                    logger.warning(
-                        f"Telnet attempt failed for {username} with {reader_name}: {error}"
-                    )
-                    if not authenticated:
-                        break
-                    continue
-                if credentials:
-                    logger.info(
-                        f"Retrieved administrator credentials using {username} with {reader_name}."
-                    )
-                    return credentials
-                logger.debug(
-                    f"No administrator credentials returned by {username} with {reader_name}."
-                )
-        logger.error("No Telnet username and retrieval method succeeded.")
-        return None
+                        if credentials.complete:
+                            logger.info(
+                                f"Retrieved administrator credentials using {username} with {reader_name}."
+                            )
+                            return credentials
+                        if credentials.password or (
+                            credentials.username and partial is None
+                        ):
+                            partial = credentials
+                        logger.debug(
+                            f"No complete credentials returned by {reader_name}."
+                        )
+            except (OSError, EOFError) as error:
+                logger.warning(f"Telnet session ended for {username}: {error}")
+        if partial is None:
+            logger.error("No Telnet username and retrieval method succeeded.")
+        return partial
 
-    def manage_modem(self):
+    def manage_modem(self) -> Optional[Credentials]:
         if self.enable_telnet():
             return self.get_admin_password()
-        else:
-            return False
+        return None
 
     def main(self):
         config_file = os.path.join(sys.path[0], "CMCCModelConfig.json")
@@ -326,10 +349,23 @@ class ModemManager:
                 logger.error("Cannot continue without a reachable host and a valid ARP entry.")
                 exit(0)
         credentials = self.manage_modem()
-        if isinstance(credentials, tuple) and len(credentials) == 2 and all(credentials):
-            logger.info(f"Successfully obtained Admin Username and Password for {self.host}!")
-            logger.info(f"Username: {credentials[0]}")
-            logger.info(f"Password: {credentials[1]}")
+        if credentials is not None:
+            if credentials.complete:
+                logger.info(
+                    f"Successfully obtained Admin Username and Password for {self.host}!"
+                )
+            else:
+                logger.warning("Only partial administrator credentials were retrieved.")
+            if credentials.username:
+                logger.info(f"Username: {credentials.username}")
+            else:
+                logger.warning("Username: unconfirmed")
+            if credentials.password:
+                logger.info(f"Password: {credentials.password}")
+            else:
+                logger.warning("Password: unconfirmed")
+            if not credentials.complete:
+                exit(0)
         else:
             logger.error("Failed to obtain Admin Username and Password.")
             logger.info(

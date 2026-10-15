@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from main import ModemManager
+from main import Credentials, ModemManager
 
 
 class MainFlowTests(unittest.TestCase):
@@ -26,7 +26,9 @@ class MainFlowTests(unittest.TestCase):
                     patch("builtins.input", side_effect=["", "n"]) as input_mock,
                     patch.object(manager, "get_mac_address", side_effect=get_mac),
                     patch.object(
-                        manager, "manage_modem", return_value=("admin", "secret")
+                        manager,
+                        "manage_modem",
+                        return_value=Credentials("admin", "secret"),
                     ) as manage_modem,
                     self.assertRaises(SystemExit),
                 ):
@@ -75,7 +77,12 @@ class MainFlowTests(unittest.TestCase):
         get_mac.assert_not_called()
 
     def test_retrieval_failure_exits_without_prompting_to_save(self):
-        for failed_result in (False, None, (None, None), ("", "")):
+        for failed_result in (
+            None,
+            Credentials("", ""),
+            Credentials("", "partial-password"),
+            Credentials("partial-account", ""),
+        ):
             with self.subTest(failed_result=failed_result):
                 manager = ModemManager()
                 with (
@@ -93,13 +100,39 @@ class MainFlowTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, 0)
                 input_mock.assert_not_called()
 
+    def test_partial_password_is_displayed_without_prompting_to_save(self):
+        manager = ModemManager()
+        with (
+            patch("main.os.path.exists", return_value=False),
+            patch.object(manager, "set_host", return_value="192.168.0.1"),
+            patch.object(manager, "get_mac_address", return_value="FFFFFFFFFFFF"),
+            patch.object(
+                manager,
+                "manage_modem",
+                return_value=Credentials("", "retrieved-secret"),
+            ),
+            patch("main.logger.info") as info,
+            patch("main.logger.warning") as warning,
+            patch("builtins.input") as input_mock,
+            self.assertRaises(SystemExit),
+        ):
+            manager.main()
+
+        messages = "\n".join(call.args[0] for call in info.call_args_list)
+        self.assertIn("retrieved-secret", messages)
+        self.assertNotIn("CMCCAdmin", messages)
+        warning.assert_called()
+        input_mock.assert_not_called()
+
     def test_success_still_prompts_to_save(self):
         manager = ModemManager()
         with (
             patch("main.os.path.exists", return_value=False),
             patch.object(manager, "set_host", return_value="192.168.0.1"),
             patch.object(manager, "get_mac_address", return_value="FFFFFFFFFFFF"),
-            patch.object(manager, "manage_modem", return_value=("admin", "password")),
+            patch.object(
+                manager, "manage_modem", return_value=Credentials("admin", "password")
+            ),
             patch("builtins.input", return_value="n") as input_mock,
         ):
             with self.assertRaises(SystemExit) as raised:
@@ -139,7 +172,9 @@ class MainFlowTests(unittest.TestCase):
                 },
             ),
             patch.object(manager, "get_mac_address") as get_mac_address,
-            patch.object(manager, "manage_modem", return_value=("admin", "password")),
+            patch.object(
+                manager, "manage_modem", return_value=Credentials("admin", "password")
+            ),
             patch("builtins.input", side_effect=["y", "n"]),
         ):
             with self.assertRaises(SystemExit) as raised:

@@ -1,0 +1,191 @@
+[
+  {
+    "username": "root",
+    "step": "login",
+    "command": "",
+    "response": "\r\r\n(none) login: ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "login",
+    "command": "root\n",
+    "response": "root\r\nPassword: ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "login",
+    "command": "REDACTED\n",
+    "response": "\r\n\r\n\r\nBusyBox v1.11.3 (2017-09-18 16:28:51 CST) built-in shell (ash)\r\nEnter 'help' for a list of built-in commands.\r\n\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "interactive",
+    "command": "\n",
+    "response": "\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "missing_file",
+    "command": "cat /flash/cfg/agentconf/__cm_modem_missing_probe__.conf\n",
+    "response": "cat /flash/cfg/agentconf/__cm_modem_missing_probe__.conf\r\ncat: can't open '/flash/cfg/agentconf/__cm_modem_missing_probe__.conf': No such file or directory\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "unsupported_command",
+    "command": "__cm_modem_unsupported_probe__\n",
+    "response": "__cm_modem_unsupported_probe__\r\n-ash: __cm_modem_unsupported_probe__: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "missing_cfg_value",
+    "command": "cfg_cmd get InternetGatewayDevice.DeviceInfo.__CMModemMissingProbe__\n",
+    "response": "cfg_cmd get InternetGatewayDevice.DeviceInfo.__CMModemMissingProbe__\r\n-ash: cfg_cmd: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "cfg_cmd",
+    "command": "cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username\n",
+    "response": "cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Userna\r\r\nme\r\n-ash: cfg_cmd: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "cfg_cmd",
+    "command": "cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Password\n",
+    "response": "cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Passwo\r\r\nrd\r\n-ash: cfg_cmd: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "command_timeout",
+    "command": "sleep 6\n",
+    "response": "sleep 6\r\n",
+    "matched": false,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "command_timeout",
+    "command": "\n",
+    "response": "\r\n/var # \r",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "post_timeout",
+    "command": "__cm_modem_unsupported_probe__\n",
+    "response": "\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "factory_cli",
+    "command": "load_cli factory\n",
+    "response": "__cm_modem_unsupported_probe__\r\n-ash: __cm_modem_unsupported_probe__: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "factory_cli",
+    "command": "show admin_name\n",
+    "response": "load_cli factory\r\n-ash: load_cli: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "factory_cli",
+    "command": "show admin_pwd\n",
+    "response": "show admin_name\r\n-ash: show: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "unsupported_factory_command",
+    "command": "show __cm_modem_missing_probe__\n",
+    "response": "show admin_pwd\r\n-ash: show: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "exit",
+    "command": "exit\n",
+    "response": "show __cm_modem_missing_probe__\r\n-ash: show: not found\r\n/var # ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "root",
+    "step": "exit",
+    "command": "exit\n",
+    "response": "exit\r\n",
+    "matched": false,
+    "eof": true,
+    "error": ""
+  },
+  {
+    "username": "admin",
+    "step": "login",
+    "command": "",
+    "response": "\r\r\n(none) login: ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "admin",
+    "step": "login",
+    "command": "admin\n",
+    "response": "admin\r\nPassword: ",
+    "matched": true,
+    "eof": false,
+    "error": ""
+  },
+  {
+    "username": "admin",
+    "step": "login",
+    "command": "REDACTED\n",
+    "response": "\r\nLogin incorrect\r\n(none) login: ",
+    "matched": false,
+    "eof": false,
+    "error": ""
+  }
+]

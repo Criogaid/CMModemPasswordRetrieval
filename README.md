@@ -65,11 +65,11 @@ Without saved configuration, the program validates an explicitly entered IPv4 ad
 
 After obtaining the MAC address, the program requests `/cgi-bin/telnetenable.cgi?telnetenable=1&key=<MAC>`. The response must be HTTP 200; redirects are not followed and the response body is not used to select a retrieval method. It then opens and closes a TCP connection to the Telnet port (23). If either check fails, the program stops before attempting any login or credential query.
 
-The program tries `root`, then `admin`, using `Fh@` followed by the last six uppercase MAC characters as the Telnet password. For each username, it tries these readers in order: `cat /flash/cfg/agentconf/factory.conf` (`TelecomAccount` and `TelecomPasswd`), `load_cli factory` followed by `show admin_pwd` and `show admin_name`, then `cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username` and `.Password`. Each combination uses a fresh Telnet session, which is closed after the attempt. A login failure skips the remaining readers for that username; a reader failure advances to the next reader. The first successful result stops all further attempts.
+The program tries `root`, then `admin`, using `Fh@` followed by the last six uppercase MAC characters as the Telnet password. Each username is authenticated at most once per run. After login, an empty line must produce a new CLI prompt before queries begin. The same session then tries `cat /flash/cfg/agentconf/factory.conf` (`TelecomAccount` and `TelecomPasswd`), `cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username` and `.Password`, and finally `load_cli factory` followed by `show admin_name` and `show admin_pwd`. Factory mode runs last so subsequent readers do not depend on exiting it correctly. A complete result stops all further attempts.
 
-The factory CLI reader uses `CMCCAdmin` with a warning if it receives a nonempty password but no account from `show admin_name`. Other readers require both values. Passwords are taken directly from device output, without adding an account prefix; `cfg_cmd` results exclude the `get success!value=` marker.
+A reader succeeds only when its responses contain both a nonempty account and password. Error wording such as `Unknown command` or `FHAPI_INIT Error!` does not control fallback. A completed response without the required fields advances to the next reader. Partial results are retained without guessing an account or combining fields from different readers or sessions. If no complete result is found, any retained fields are displayed with the missing field marked unconfirmed, and the program exits without offering to save configuration. Passwords are taken directly from device output, without adding an account prefix; `cfg_cmd` results exclude the `get success!value=` marker.
 
-Login and password prompts are matched without regard to letter case. Commands wait for a shell or CLI prompt ending in `#`, `$`, or `>` instead of using fixed delays. HTTP requests, TCP connections, and prompt reads have bounded timeouts defined by `HTTP_TIMEOUT_SECONDS` and `TELNET_TIMEOUT_SECONDS` in [main.py](main.py).
+Login and password prompts are matched without regard to letter case. Commands wait for a shell or CLI prompt ending in `#`, `$`, or `>` instead of using fixed delays. If a command times out, the program waits once more for that command's prompt, then sends one empty line and consumes its new prompt. This keeps a delayed command response from being mistaken for the next command's output. A recovered session continues without accepting the incomplete response. A failed interaction check or a disconnected session closes that connection and advances to the next username, without logging in again as the same user. HTTP requests, TCP connections, and prompt reads have bounded timeouts defined by `HTTP_TIMEOUT_SECONDS` and `TELNET_TIMEOUT_SECONDS` in [main.py](main.py).
 
 成功后，程序会显示凭据，并询问是否保存当前 IP 和 MAC 供下次直接使用。失败时会立即退出，不保存配置。
 
@@ -86,7 +86,7 @@ python -m unittest discover -s tests -v
 python -m pytest -q
 ```
 
-Automated tests simulate HTTP, ARP, and Telnet interactions, including a local TCP server for Telnet protocol checks. They do not require a physical modem.
+Automated tests simulate HTTP, ARP, and Telnet interactions, including a local TCP server and replay of [sanitized device responses](tests/fixtures/README.md). The recordings cover rejected authentication, missing commands and files, delayed prompts, and session exit. They include a regression for an extra prompt left behind during timeout recovery. Tests do not require a physical modem.
 
 ## 许可证
 
