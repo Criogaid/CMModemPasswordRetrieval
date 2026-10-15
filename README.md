@@ -11,9 +11,9 @@
 
 我们欢迎任何形式的贡献，包括但不限于提交问题、改进代码、提供文档等。感谢您对CMModemPasswordRetrieval项目的支持。
 
-感谢[YxVM](https://yxvm.com/aff.php?aff=717)提供的服务器支持，使我能够在旅行期间顺利进行远程开发工作。
+感谢[YxVM](https://yxvm.com/register?ref=W717)提供的服务器支持，使我能够在旅行期间顺利进行远程开发工作。
 
-![yxvm](https://yxvm.com/assets/img/logo.png)
+[![YxVM](assets/yxvm.png)](https://yxvm.com/register?ref=W717)
 
 ## 环境要求
 
@@ -37,7 +37,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Enter a modem IPv4 address, or press Enter to check `192.168.0.1` first and `192.168.1.1` second. The program selects the first reachable address with a valid MAC in the ARP table and stops if neither qualifies. This order is defined by `DEFAULT_HOSTS` in [main.py](main.py). An explicitly entered address is checked on its own; reusing saved configuration skips address detection.
+输入光猫的 IPv4 地址，或直接回车，依次自动检查 `192.168.0.1`、`192.168.1.1`，使用第一个能连接且能获取 MAC 的地址。手动输入地址时只检查该地址；复用已保存配置时跳过地址探测。
 
 ## 工作流程
 
@@ -59,23 +59,23 @@ Enter a modem IPv4 address, or press Enter to check `192.168.0.1` first and `192
 
 ### 重新检测
 
-Without saved configuration, the program validates an explicitly entered IPv4 address or uses the default candidates described above. For each candidate, it sends one ping and, if that fails, tries TCP port 80. A reachable candidate must also have a valid MAC in the Windows ARP table; manual MAC entry is not supported. In automatic mode, an unreachable candidate or a missing or invalid ARP entry advances to the next address. Once an address and MAC are selected, Telnet checks and credential retrieval run only for that device.
+程序会检查光猫是否可达，并自动获取 MAC，无需手动填写。自动探测时，一个地址不可用就检查下一个；两个地址都不可用则停止。选定设备后，后续尝试都只针对该设备。
 
 ### 获取密码
 
-After obtaining the MAC address, the program requests `/cgi-bin/telnetenable.cgi?telnetenable=1&key=<MAC>`. The response must be HTTP 200; redirects are not followed and the response body is not used to select a retrieval method. It then opens and closes a TCP connection to the Telnet port (23). If either check fails, the program stops before attempting any login or credential query.
+程序先请求开启 Telnet，确认收到 HTTP 200 响应且 Telnet 端口能连接后，才开始登录。任一步失败都会停止。
 
-The program tries `root`, then `admin`, using `Fh@` followed by the last six uppercase MAC characters as the Telnet password. Each username is authenticated at most once per run. After login, an empty line must produce a new CLI prompt before queries begin. The same session then tries `cat /flash/cfg/agentconf/factory.conf` (`TelecomAccount` and `TelecomPasswd`), `cfg_cmd get InternetGatewayDevice.DeviceInfo.X_CMCC_TeleComAccount.Username` and `.Password`, and finally `load_cli factory` followed by `show admin_name` and `show admin_pwd`. Factory mode runs last so subsequent readers do not depend on exiting it correctly. A complete result stops all further attempts.
+程序依次尝试 `root` 和 `admin`，密码均为 `Fh@` 加 MAC 地址的后六位大写字符。每次运行中，每个用户名最多登录一次。登录并确认命令行能正常交互后，在同一连接内依次尝试读取 `factory.conf`、使用 `cfg_cmd` 查询、进入工厂命令行查询，无需手动选择方案。取得完整账号和密码后立即停止尝试。
 
-A reader succeeds only when its responses contain both a nonempty account and password. Error wording such as `Unknown command` or `FHAPI_INIT Error!` does not control fallback. A completed response without the required fields advances to the next reader. Partial results are retained without guessing an account or combining fields from different readers or sessions. If no complete result is found, any retained fields are displayed with the missing field marked unconfirmed, and the program exits without offering to save configuration. Passwords are taken directly from device output, without adding an account prefix; `cfg_cmd` results exclude the `get success!value=` marker.
+是否成功以实际读到的账号和密码为准，不依赖固件的报错文字。一种方法未取得完整结果时会继续尝试；若最终只取得部分信息，会显示已有内容并标明缺失项，不猜测账号，也不拼接不同方法或连接的结果。
 
-Login and password prompts are matched without regard to letter case. Commands wait for a shell or CLI prompt ending in `#`, `$`, or `>` instead of using fixed delays. If a command times out, the program waits once more for that command's prompt, then sends one empty line and consumes its new prompt. This keeps a delayed command response from being mistaken for the next command's output. A recovered session continues without accepting the incomplete response. A failed interaction check or a disconnected session closes that connection and advances to the next username, without logging in again as the same user. HTTP requests, TCP connections, and prompt reads have bounded timeouts defined by `HTTP_TIMEOUT_SECONDS` and `TELNET_TIMEOUT_SECONDS` in [main.py](main.py).
+命令响应超时后，程序会短暂等待并检查连接是否仍可交互；恢复后继续尝试，但不会采用不完整的响应。连接断开或无法恢复时，会结束当前连接并尝试下一个用户名，不重复登录同一用户。
 
 成功后，程序会显示凭据，并询问是否保存当前 IP 和 MAC 供下次直接使用。失败时会立即退出，不保存配置。
 
 ## 调试与安全
 
-The program logs complete ARP output and decoded Telnet replies, which can contain device MAC addresses and administrator credentials, including an echoed Telnet password. Redact terminal logs, recordings, and screenshots before sharing them.
+终端日志可能包含设备 MAC、登录密码和超级管理员账号密码。分享日志或截图前，请遮盖这些信息。
 
 `CMCCModelConfig.json` 已加入 `.gitignore`，不要提交真实设备配置或凭据。程序启用 Telnet 后不会自动关闭该服务；完成操作后应按设备管理要求关闭 Telnet 或重启光猫。
 
@@ -86,11 +86,7 @@ python -m unittest discover -s tests -v
 python -m pytest -q
 ```
 
-Automated tests simulate HTTP, ARP, and Telnet interactions, including a local TCP server and replay of [sanitized device responses](tests/fixtures/README.md). The recordings cover rejected authentication, missing commands and files, delayed prompts, and session exit. They include a regression for an extra prompt left behind during timeout recovery. Tests do not require a physical modem.
-
-## Code structure
-
-The module-level `main()` function handles command-line input, configuration, and output. Device operations receive explicit arguments: `get_mac_address(host)` detects the MAC, and `retrieve_credentials(host, mac_address, port)` runs `enable_telnet()` before `get_admin_credentials()`. Callers supply a validated IPv4 address and normalized MAC; the port defaults to `TELNET_PORT`. Telnet connections remain scoped to their login attempts, and `Credentials` represents complete or partial results.
+自动化测试无需连接真实光猫，覆盖连接失败、命令不支持、超时和断开等情况。
 
 ## 许可证
 
