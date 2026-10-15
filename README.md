@@ -37,7 +37,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-程序会提示输入光猫 IPv4 地址，默认值为 `192.168.0.1`。
+Enter a modem IPv4 address, or press Enter to check `192.168.0.1` first and `192.168.1.1` second. The program selects the first reachable address with a valid MAC in the ARP table and stops if neither qualifies. This order is defined by `DEFAULT_HOSTS` in [main.py](main.py). An explicitly entered address is checked on its own; reusing saved configuration skips address detection.
 
 ## 工作流程
 
@@ -59,13 +59,7 @@ python main.py
 
 ### 重新检测
 
-未复用配置时，程序按以下顺序检查目标：
-
-1. 校验 IPv4 地址格式。
-2. 发送一次 ping；如果没有响应，则尝试建立 TCP 80 连接。
-3. 两种方式都失败时立即终止。
-4. 读取 Windows ARP 表，要求存在该 IP 对应的有效 MAC。
-5. ARP 缺项或格式无效时立即终止，不支持手工输入 MAC。
+Without saved configuration, the program validates an explicitly entered IPv4 address or uses the default candidates described above. For each candidate, it sends one ping and, if that fails, tries TCP port 80. A reachable candidate must also have a valid MAC in the Windows ARP table; manual MAC entry is not supported. In automatic mode, an unreachable candidate or a missing or invalid ARP entry advances to the next address. Once an address and MAC are selected, Telnet checks and credential retrieval run only for that device.
 
 ### 获取密码
 

@@ -22,6 +22,8 @@ HOST_PATTERN = re.compile(
     r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
 )
 MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
+# Keep the discovery order in sync with README.md under "运行".
+DEFAULT_HOSTS = ("192.168.0.1", "192.168.1.1")
 HTTP_TIMEOUT_SECONDS = 5
 TELNET_TIMEOUT_SECONDS = 5
 LOGIN_PROMPT = re.compile(rb"login:\s*", re.IGNORECASE)
@@ -175,12 +177,14 @@ class ModemManager:
         self.port = 23
         self.mac_address = ""
 
-    def set_host(self):
-        host = input("Please enter the IP address of the modem (default:192.168.0.1): ") or "192.168.0.1"
-        if not validate_host(host):
+    def set_host(self) -> str:
+        """Return the supplied IPv4 address, or an empty string for auto-detection."""
+        host = input(
+            f"Enter the modem IPv4 address (Enter to try {' then '.join(DEFAULT_HOSTS)}): "
+        ).strip()
+        if host and not validate_host(host):
             raise ValueError("Invalid host address.")
-        self.host = host.strip()
-        logger.info(f"Host set to: {self.host}")
+        self.host = host
         return self.host
 
     def get_mac_address(self):
@@ -311,8 +315,13 @@ class ModemManager:
                     logger.error(f"Failed to read configuration. Please delete: {config_file} and try again. Error details below:")
                     raise
         if not config_loaded:
-            self.host = self.set_host()
-            self.mac_address = self.get_mac_address()
+            host = self.set_host()
+            for candidate in (host,) if host else DEFAULT_HOSTS:
+                self.host = candidate
+                logger.info(f"Checking modem at {self.host}.")
+                self.mac_address = self.get_mac_address()
+                if self.mac_address:
+                    break
             if not self.mac_address:
                 logger.error("Cannot continue without a reachable host and a valid ARP entry.")
                 exit(0)
