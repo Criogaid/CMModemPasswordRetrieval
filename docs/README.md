@@ -2,7 +2,7 @@
 
 仅可在自己拥有或已获授权管理的设备上操作。以下步骤面向 Windows 10/11，适用于部分中国移动 HG 系列光猫；同一型号的不同固件也可能有差异。
 
-原作者：[布束砥信](https://space.bilibili.com/521361612)；原出处：[B 站专栏](https://www.bilibili.com/read/cv21044770/)；整理项目：[CMModemPasswordRetrieval](https://github.com/Criogaid/CMModemPasswordRetrieval)。原帖已无法访问，此处根据仓库代码、[marcos1 的 PR #3](https://github.com/Criogaid/CMModemPasswordRetrieval/pull/3) 和用户提供的教程截图重新整理，并非原文备份。本文沿用项目的 [CC BY-NC-SA 4.0 许可协议](../LICENSE)，转载请保留署名、来源和相同许可。
+原作者：[布束砥信](https://space.bilibili.com/521361612)；原出处：[B 站专栏](https://www.bilibili.com/read/cv21044770/)；整理项目：[CMModemPasswordRetrieval](https://github.com/Criogaid/CMModemPasswordRetrieval)。原帖已无法访问，此处按[仓库代码](../main.py)和 [marcos1 的 PR #3](https://github.com/Criogaid/CMModemPasswordRetrieval/pull/3) 整理操作步骤，并非原文备份。本文沿用项目的 [CC BY-NC-SA 4.0 许可协议](../LICENSE)，转载请保留署名、来源和相同许可。
 
 ## 先连接，再选择读取方法
 
@@ -11,8 +11,8 @@
 | 教程 | 使用条件 | 已有依据 |
 | --- | --- | --- |
 | [方法一：读取 factory.conf](factory-conf.md) | 普通命令行能读取配置文件 | 仓库原有方式；现有实机已通过 `root` 读取成功 |
-| [方法二：使用 cfg_cmd 查询](cfg-cmd.md) | 普通命令行支持 `cfg_cmd` | 用户提供的截图；现有实机不支持该命令 |
-| [方法三：使用工厂命令行查询](factory-cli.md) | 支持 `load_cli factory` 和 `show` 查询 | PR #3 报告在重庆移动 HG6042A1 上使用；用户截图也展示了此方式，现有实机不支持 |
+| [方法二：使用 cfg_cmd 查询](cfg-cmd.md) | 普通命令行支持 `cfg_cmd` | [仓库代码](../main.py)中的查询方式；现有实机不支持该命令 |
+| [方法三：使用工厂命令行查询](factory-cli.md) | 支持 `load_cli factory` 和 `show` 查询 | [PR #3](https://github.com/Criogaid/CMModemPasswordRetrieval/pull/3) 报告在重庆移动 HG6042A1 上使用；现有实机不支持 |
 
 工厂命令行放在最后，避免后续命令因所处模式不同而无法执行。三种方法不固定绑定某个 Telnet 用户名。
 
